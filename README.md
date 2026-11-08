@@ -14,7 +14,7 @@ These local settings only apply inside that window. A normal `claude` in any oth
 |---|---|---|
 | `qwen3-coder-uncensored-64k` | Huihui Qwen3-Coder-30B-A3B, abliterated (uncensored), i1-Q4_K_M, 64k memory | ~25 GB when running. About 60% sits on the graphics card, the rest in system memory. Supports tools. |
 
-Source file: `C:\AI\models\mradermacher\Huihui-Qwen3-Coder-30B-A3B-Instruct-abliterated-i1-GGUF\`
+Source: https://hf.co/mradermacher/Huihui-Qwen3-Coder-30B-A3B-Instruct-abliterated-i1-GGUF (the downloaded .gguf was deleted after import; Ollama keeps its own copy, so re-download it only if you need to rebuild).
 
 ## Add a new model
 1. Download the `.gguf` into `C:\AI\models\<author>\<model>\`.
