@@ -17,8 +17,6 @@ import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlsplit
 
-PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 11435
-UPSTREAM = urlsplit(sys.argv[2] if len(sys.argv) > 2 else "http://127.0.0.1:11434")
 DEBUG_LOG = os.environ.get("LC_RELAY_LOG")  # optional: record requests/responses here
 HOP = {"host", "content-length", "transfer-encoding", "connection", "keep-alive"}
 
@@ -55,6 +53,7 @@ def fold_system_messages(body):
 
 class Relay(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
+    upstream = urlsplit("http://127.0.0.1:11434")  # replaced per server by make_server
 
     def log_message(self, *args):
         pass
@@ -76,7 +75,8 @@ class Relay(BaseHTTPRequestHandler):
         headers = {k: v for k, v in self.headers.items() if k.lower() not in HOP}
         if body is not None:
             headers["Content-Length"] = str(len(body))
-        conn = http.client.HTTPConnection(UPSTREAM.hostname, UPSTREAM.port or 80, timeout=1800)
+        up = self.upstream
+        conn = http.client.HTTPConnection(up.hostname, up.port or 80, timeout=1800)
         conn.request(self.command, self.path, body=body, headers=headers)
         resp = conn.getresponse()
         self.send_response(resp.status, resp.reason)
@@ -110,5 +110,56 @@ class Relay(BaseHTTPRequestHandler):
     do_GET = do_POST = do_HEAD = do_DELETE = do_PUT = _relay
 
 
+def make_server(port, upstream):
+    """Relay on 127.0.0.1:<port> (0 = any free port) forwarding to `upstream`."""
+    handler = type("BoundRelay", (Relay,), {"upstream": urlsplit(upstream)})
+    return ThreadingHTTPServer(("127.0.0.1", port), handler)
+
+
+def parent_alive(pid):
+    """True while process `pid` exists (no signals sent; safe on Windows)."""
+    if sys.platform == "win32":
+        import ctypes
+        k32 = ctypes.windll.kernel32
+        h = k32.OpenProcess(0x00100000, False, pid)  # SYNCHRONIZE
+        if not h:
+            return False
+        try:
+            return k32.WaitForSingleObject(h, 0) == 0x102  # WAIT_TIMEOUT = still running
+        finally:
+            k32.CloseHandle(h)
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+
+
+def watch_parent(pid, server, every=2.0):
+    """Shut the relay down once the launcher that started it is gone."""
+    import threading
+    import time
+
+    def loop():
+        while parent_alive(pid):
+            time.sleep(every)
+        server.shutdown()
+    threading.Thread(target=loop, daemon=True).start()
+
+
 if __name__ == "__main__":
-    ThreadingHTTPServer(("127.0.0.1", PORT), Relay).serve_forever()
+    args = sys.argv[1:]
+    parent = None
+    if "--parent" in args:
+        i = args.index("--parent")
+        parent = int(args[i + 1])
+        del args[i:i + 2]
+    port = int(args[0]) if args else 11435
+    upstream = args[1] if len(args) > 1 else "http://127.0.0.1:11434"
+    srv = make_server(port, upstream)
+    print(f"PORT {srv.server_address[1]}", flush=True)
+    if parent:
+        watch_parent(parent, srv)
+    srv.serve_forever()

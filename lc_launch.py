@@ -21,7 +21,6 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 OLLAMA = os.environ.get("LC_OLLAMA_URL", "http://127.0.0.1:11434")
-RELAY_PORT = 11435
 MIN_CTX = 32768        # Claude Code needs ~23k just to start a task
 WANT_CTX = 65536       # comfortable default for agent work
 
@@ -138,29 +137,23 @@ def make_variant(f, ctx):
 
 # ---------- relay ----------
 
-def ensure_relay():
-    url = f"http://127.0.0.1:{RELAY_PORT}"
-    try:
-        api("/api/version", base=url, timeout=3)
-        return
-    except OSError:
-        pass
-    flags = getattr(subprocess, "CREATE_NEW_CONSOLE", 0)
-    kw = {"creationflags": flags} if flags else {}
-    if flags:
-        si = subprocess.STARTUPINFO()
-        si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-        si.wShowWindow = 7  # minimised, not focused
-        kw["startupinfo"] = si
-    subprocess.Popen([sys.executable, str(ROOT / "lc_proxy.py"), str(RELAY_PORT)], **kw)
-    for _ in range(15):
-        time.sleep(1)
-        try:
-            api("/api/version", base=url, timeout=3)
-            return
-        except OSError:
-            pass
-    sys.exit("The LocalCoder relay did not start.")
+def start_relay(upstream=None):
+    """Start this session's relay on a free port; returns (process, port).
+
+    The relay picks its own port (no clashes between windows) and exits by
+    itself when this launcher process goes away, even if the window is closed.
+    """
+    cmd = [sys.executable, str(ROOT / "lc_proxy.py"), "0", upstream or OLLAMA,
+           "--parent", str(os.getpid())]
+    kw = {}
+    if sys.platform == "win32":
+        kw["creationflags"] = subprocess.CREATE_NO_WINDOW
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, **kw)
+    line = proc.stdout.readline().split()
+    if len(line) != 2 or line[0] != "PORT":
+        proc.kill()
+        sys.exit("The LocalCoder relay did not start.")
+    return proc, int(line[1])
 
 
 # ---------- interaction ----------
@@ -261,6 +254,7 @@ def main():
     if a.yes:
         cmd.append("--yes")
     extra = list(passthrough)
+    relay = None
     if tool == "claude":
         for k in ("OPUS", "SONNET", "HAIKU", "FABLE"):
             env[f"ANTHROPIC_DEFAULT_{k}_MODEL"] = f["name"]
@@ -268,8 +262,8 @@ def main():
         ctx = f["num_ctx"] or MIN_CTX
         env["CLAUDE_CODE_MAX_CONTEXT_TOKENS"] = str(ctx)
         env["CLAUDE_CODE_MAX_OUTPUT_TOKENS"] = str(min(8192, ctx // 8))
-        ensure_relay()
-        env["OLLAMA_HOST"] = f"127.0.0.1:{RELAY_PORT}"
+        relay, port = start_relay()
+        env["OLLAMA_HOST"] = f"127.0.0.1:{port}"
         extra = ["--settings", str(ROOT / "claude-settings.json")] + extra
     if extra:
         cmd += ["--"] + extra
