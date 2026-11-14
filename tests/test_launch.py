@@ -55,5 +55,18 @@ class CheckTests(unittest.TestCase):
         self.assertFalse(lc_launch.checks_passed([("a", "ok", ""), ("b", "fail", "")]))
 
 
+class PlatformTests(unittest.TestCase):
+    def test_ollama_start_command_per_platform(self):
+        self.assertEqual(lc_launch.ollama_start_command("darwin"), ["open", "-a", "Ollama"])
+        self.assertEqual(lc_launch.ollama_start_command("linux"), ["ollama", "serve"])
+        win = lc_launch.ollama_start_command("win32")
+        self.assertTrue(win[0].endswith("ollama app.exe") or win == ["ollama", "serve"])
+
+    def test_relay_popen_kwargs_have_no_windows_flags_elsewhere(self):
+        for plat in ("darwin", "linux"):
+            self.assertNotIn("creationflags", lc_launch.relay_popen_kwargs(plat))
+        self.assertIn("creationflags", lc_launch.relay_popen_kwargs("win32"))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -44,15 +44,25 @@ def ollama_up():
         return False
 
 
+def ollama_start_command(platform=sys.platform):
+    """How to start Ollama in the background on this kind of computer."""
+    if platform == "win32":
+        exe = Path(os.environ.get("LOCALAPPDATA", "")) / "Programs" / "Ollama" / "ollama app.exe"
+        return [str(exe)] if exe.exists() else ["ollama", "serve"]
+    if platform == "darwin":
+        return ["open", "-a", "Ollama"]
+    return ["ollama", "serve"]
+
+
 def start_ollama():
     if ollama_up():
         return
-    exe = Path(os.environ.get("LOCALAPPDATA", "")) / "Programs" / "Ollama" / "ollama app.exe"
     print("Starting Ollama...")
-    if exe.exists():
-        os.startfile(str(exe))  # noqa: S606 - Windows only, launches the Ollama tray app
-    else:
-        subprocess.Popen(["ollama", "serve"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    try:
+        subprocess.Popen(ollama_start_command(), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                         **relay_popen_kwargs())
+    except OSError:
+        pass
     for _ in range(30):
         if ollama_up():
             return
@@ -138,6 +148,13 @@ def make_variant(f, ctx):
 
 # ---------- relay ----------
 
+def relay_popen_kwargs(platform=sys.platform):
+    """Background helper processes: no console window on Windows."""
+    if platform == "win32":
+        return {"creationflags": 0x08000000}  # CREATE_NO_WINDOW
+    return {}
+
+
 def start_relay(upstream=None):
     """Start this session's relay on a free port; returns (process, port).
 
@@ -146,10 +163,8 @@ def start_relay(upstream=None):
     """
     cmd = [sys.executable, str(ROOT / "lc_proxy.py"), "0", upstream or OLLAMA,
            "--parent", str(os.getpid())]
-    kw = {}
-    if sys.platform == "win32":
-        kw["creationflags"] = subprocess.CREATE_NO_WINDOW
-    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, **kw)
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True,
+                            **relay_popen_kwargs())
     line = proc.stdout.readline().split()
     if len(line) != 2 or line[0] != "PORT":
         proc.kill()

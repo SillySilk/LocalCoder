@@ -17,8 +17,11 @@ Regular `claude` is unaffected. The local settings only apply inside the LocalCo
 
 Switching models is just closing the window and starting again with a different pick.
 
+## Mac and Linux (untested)
+`./localcoder.sh [folder]` does what `LocalCoder.bat` does, and `./install-command.sh [name]` creates the `george` command (or your own name) in `~/.local/bin`. The launcher starts Ollama with `open -a Ollama` on a Mac and `ollama serve` on Linux. These scripts have only been syntax-checked and run under Git Bash on Windows, never on a real Mac or Linux machine; reports are welcome.
+
 ## Requirements
-- Windows, [Ollama](https://ollama.com) 0.40 or newer, Python 3, and Claude Code and/or OpenCode installed.
+- Windows (Mac/Linux untested), [Ollama](https://ollama.com) 0.40 or newer, Python 3, and Claude Code and/or OpenCode installed.
 - A model that supports **tool use** (`ollama show <model>` lists `tools` under Capabilities). Without it the model can't act as an agent.
 - Enough memory for the model plus at least 32k of context; 64k is better (see below).
 
