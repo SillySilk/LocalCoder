@@ -16,7 +16,7 @@ class CheckTests(unittest.TestCase):
         old = lc_launch.OLLAMA
         lc_launch.OLLAMA = fake.url
         try:
-            return {name: (status, detail) for name, status, detail in lc_launch.run_checks()}
+            return {name: (status, detail) for name, status, detail in lc_launch.run_checks(include_updates=False)}
         finally:
             lc_launch.OLLAMA = old
             fake.close()

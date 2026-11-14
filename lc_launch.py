@@ -185,7 +185,7 @@ def _version_tuple(v):
     return tuple(out)
 
 
-def run_checks():
+def run_checks(include_updates=True):
     """Everything LocalCoder depends on, as (name, status, detail) rows.
 
     status is "ok", "warn" (works, but worth knowing) or "fail" (broken).
@@ -227,6 +227,9 @@ def run_checks():
             have = f"{f['num_ctx'] // 1024}k" if f["num_ctx"] else "default"
             problems.append(f"{have} memory; launcher will offer a {WANT_CTX // 1024}k version")
         rows.append((f"model {f['name']}", "warn" if problems else "ok", "; ".join(problems) or describe(f)))
+    if include_updates:
+        import lc_update
+        rows += lc_update.rows(lc_update.installed(v), lc_update.latest(), lc_update.tested())
     return rows
 
 
@@ -305,7 +308,19 @@ def main():
     ap.add_argument("--tool", choices=["claude", "opencode"])
     ap.add_argument("--yes", action="store_true", help="no questions; accept defaults")
     ap.add_argument("--check", action="store_true", help="check the setup and exit")
+    ap.add_argument("--update", action="store_true",
+                    help="update Claude Code, OpenCode, Ollama and LocalCoder, then check")
     a = ap.parse_args(argv)
+    if a.update:
+        import lc_update
+        print("Updating...")
+        for name, ok, detail in lc_update.run_updates():
+            print(f"  {'OK  ' if ok else 'FAIL'}  {name}: {detail}")
+        print("\nChecking the setup after updating:")
+        passed = print_checks(run_checks())
+        print("\nTo confirm everything still works with a model, run:\n"
+              "  python tests/run_tests.py <model> --tools claude --tasks 1-explain")
+        sys.exit(0 if passed else 1)
     if a.check:
         sys.exit(0 if print_checks(run_checks()) else 1)
 

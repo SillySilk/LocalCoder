@@ -73,6 +73,12 @@ def main():
         print("\nFRESH CLONE CHECK FAILED:\n- " + "\n- ".join(failures))
         sys.exit(1)
     print("\nFresh clone check passed.")
+    if not a.no_model:
+        import datetime
+        sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+        import lc_update
+        lc_update.record_tested(lc_update.installed(), datetime.date.today())
+        print("Recorded these versions in tested-versions.json.")
 
 
 if __name__ == "__main__":

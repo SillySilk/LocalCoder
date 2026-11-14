@@ -51,6 +51,12 @@ The example Modelfile is set up for a Qwen3-Coder-family model (the one this was
 ## Check your setup
 `python lc_launch.py --check` (or `george --check`) reports Ollama, Claude Code, OpenCode, the relay, and every installed model's tool support and memory. "note" lines are fine; only "FAIL" means something is broken.
 
+## Updating
+Claude Code, OpenCode and Ollama change often, and an update can change something LocalCoder depends on.
+- `--check` tells you when an update is available, and when what you have is newer than the versions LocalCoder was last tested with (`tested-versions.json`).
+- `python lc_launch.py --update` (or `george --update`) runs `claude update` and `opencode upgrade`, installs a newer Ollama (Windows; elsewhere it points you to the installer), pulls the latest LocalCoder if this is an unmodified git clone, then runs `--check`.
+- Claude Code also updates itself in the background, so it can move past the tested version on its own; `--check` will say so.
+
 ## Compatibility
 `python tests\compat_matrix.py` downloads models one at a time, runs the practice tasks in both tools, records the result in `tests\COMPAT.md`, and deletes the model before the next one. It checks that a model works with LocalCoder, not how good it is.
 
