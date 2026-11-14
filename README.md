@@ -3,7 +3,7 @@
 A second option alongside normal Claude Code: run **Claude Code (or OpenCode) on a local, uncensored model** through Ollama. It's for the occasional project Claude won't help with. Everyday work stays on regular `claude`.
 
 ## Use it
-1. Type `localcoder` in any terminal to work in the folder you're in, or double-click `LocalCoder.bat` (you can also drag a project folder onto it). The `localcoder` command lives at `C:\Users\littl\.local\bin\localcoder.cmd` and just calls the launcher.
+1. Type `george` in any terminal to work in the folder you're in, or double-click `LocalCoder.bat` (you can also drag a project folder onto it). The `george` command lives at `C:\Users\littl\.local\bin\george.cmd` and just calls the launcher.
 2. Pick a model. Models ending in `-64k` are set up for long tasks.
 3. Pick a tool: **1 = Claude Code** (your hooks, skills and CLAUDE.md all work) or **2 = OpenCode**.
 
