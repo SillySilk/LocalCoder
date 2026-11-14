@@ -27,6 +27,7 @@
 3. **Two models or two agents share a 16 GB card** → a subagent call finishes (possibly slower), it does not crash or deadlock. (Task 6.)
 4. **Low-bit quant writes a tool call as plain text** → the relay turns a recognised pattern into a real tool call; anything unrecognised passes through unchanged. (Task 7 tests both.)
 5. **No Claude subscription / login** → LocalCoder still runs and compaction is done by the local model. (Tasks 3 and 5.)
+7. **A tool updates itself past the tested version** → `--check` says so plainly; nothing fails silently. (Task 9.)
 6. **Fresh clone on a machine without this user's plugins/paths** → `--check` passes and one practice task runs from the clone. (Task 3.)
 
 ---
@@ -122,7 +123,22 @@ Gate: start only after `tests/COMPAT.md` exists; add one test per failure patter
 - [ ] **Step 4:** Test PASS; on this PC `qwen3-coder-uncensored-64k` shows the warning (it's ~60% on GPU).
 - [ ] **Step 5:** Commit `Warn when a model doesn't fit on the graphics card`.
 
-### Task 9: Hand-off
+### Task 9: Update check and `--update`
+
+Why: Claude Code, OpenCode and Ollama change often, and any update can break the parts LocalCoder relies on (the relay exists because of one such behaviour). Users need to know (a) an update is available and (b) whether their versions are newer than the ones LocalCoder was last tested with.
+
+**Files:** Create `lc_update.py`, `tested-versions.json`; Modify `lc_launch.py` (`--check` rows, `--update` flag), `tests/compat_matrix.py` and `tests/fresh_clone_check.py` (write `tested-versions.json` after a passing run); Test `tests/test_update.py`.
+
+**Interfaces:**
+- Produces: `lc_update.installed() -> dict[str, str | None]` (keys `claude`, `opencode`, `ollama`, `localcoder` = short git commit or None), `lc_update.latest(fetch=urllib-based) -> dict[str, str | None]` (Claude Code from `https://registry.npmjs.org/@anthropic-ai/claude-code/latest`, OpenCode from `https://registry.npmjs.org/opencode-ai/latest`, Ollama from `https://api.github.com/repos/ollama/ollama/releases/latest` `tag_name` minus `v`, LocalCoder from `git ls-remote origin HEAD`; any network error → None), `lc_update.rows(installed, latest, tested) -> list[(name, status, detail)]`, `lc_update.run_updates() -> list[(name, ok, detail)]`.
+- `tested-versions.json`: `{"claude": "2.1.325", "opencode": "1.19.5", "ollama": "0.40.16", "date": "2026-11-14"}`.
+
+- [ ] **Step 1: Failing tests** (`tests/test_update.py`, fetch injected, no network): `test_update_available_is_a_note` (installed 2.1.300, latest 2.1.325 → status warn, detail "2.1.300 → 2.1.325"); `test_up_to_date_is_ok`; `test_newer_than_tested_is_a_note` (installed 2.1.400, tested 2.1.325 → warn mentioning "not yet tested with LocalCoder"); `test_offline_is_not_a_failure` (latest all None → status ok/warn, never fail, detail "couldn't check"); `test_version_compare_handles_v_prefix_and_suffixes` ("v0.40.16" == "0.40.16", "2.1.325 (Claude Code)" parses).
+- [ ] **Step 2:** Run → FAIL. **Step 3:** Implement; `--check` appends `lc_update.rows(...)`; `--update` runs `claude update`, `opencode upgrade`, `git pull --ff-only` in the LocalCoder folder (only if it is a git clone with no local changes), and for Ollama on Windows downloads `OllamaSetup.exe` from the release asset and runs it with `/VERYSILENT /NORESTART /SUPPRESSMSGBOXES` (other systems: print the official install command instead). Afterwards it runs `--check` and offers a one-task smoke test (`tests/run_tests.py <model> --tools claude --tasks 1-explain`).
+- [ ] **Step 4:** Tests PASS; `python lc_launch.py --check` on this PC shows the version rows; `python lc_launch.py --update` reports everything already up to date.
+- [ ] **Step 5:** README "Updating" section (Claude Code also updates itself; the note tells you when you're past the tested versions). Commit `Add update check and --update`.
+
+### Task 10: Hand-off
 
 - [ ] README: update Requirements, Known issues, Compatibility (summary of `tests/COMPAT.md`), relay description. Commit + push.
 - [ ] Ask the user for the 2-minute interactive check: run `george` in a scratch folder, pick a model, ask it to create and edit a file, approve one permission prompt, exit. Record the outcome in README Known issues if anything is off.
