@@ -1,4 +1,6 @@
-# Huihui Qwen3-Coder-30B-A3B abliterated (uncensored), i1-Q4_K_M by mradermacher.
+# Example 64k-context Modelfile for a Qwen3-Coder-family model.
+# Copy it, change FROM to your model, and match RENDERER/PARSER to its family.
+# This copy was used for Huihui Qwen3-Coder-30B-A3B abliterated, i1-Q4_K_M by mradermacher.
 # Source: https://hf.co/mradermacher/Huihui-Qwen3-Coder-30B-A3B-Instruct-abliterated-i1-GGUF
 # Renderer/parser copied from Ollama's official qwen3-coder so tool calls parse.
 FROM C:\AI\models\mradermacher\Huihui-Qwen3-Coder-30B-A3B-Instruct-abliterated-i1-GGUF\Huihui-Qwen3-Coder-30B-A3B-Instruct-abliterated.i1-Q4_K_M.gguf

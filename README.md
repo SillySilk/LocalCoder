@@ -1,40 +1,49 @@
 # LocalCoder
 
-A second option alongside normal Claude Code: run **Claude Code (or OpenCode) on a local, uncensored model** through Ollama. It's for the occasional project Claude won't help with. Everyday work stays on regular `claude`.
+Run **Claude Code (or OpenCode) on local open-source models** through [Ollama](https://ollama.com). You keep Claude Code's tools, hooks, skills and CLAUDE.md, but the thinking happens on your own machine:
+
+- **No usage limits.** Run as long as you like; nothing is metered.
+- **Your model, your choice.** Pick a different model each time you start, to match the job: a coding model for code, a writing model (including uncensored ones) for fiction, a strong reasoning model for research. LocalCoder doesn't favour any of them.
+- **Private.** Prompts and files stay on your machine.
+
+Regular `claude` is unaffected. The local settings only apply inside the LocalCoder window.
 
 ## Use it
-1. Type `george` in any terminal to work in the folder you're in, or double-click `LocalCoder.bat` (you can also drag a project folder onto it). The `george` command lives at `C:\Users\littl\.local\bin\george.cmd` and just calls the launcher.
-2. Pick a model. Models ending in `-64k` are set up for long tasks.
-3. Pick a tool: **1 = Claude Code** (your hooks, skills and CLAUDE.md all work) or **2 = OpenCode**.
+1. Double-click `LocalCoder.bat` (or drag a project folder onto it). After running `install-command.bat` once, you can also type `george` in any terminal to start in the folder you're in.
+2. Pick a model. Models whose names end in `-64k` or `-32k` are listed first; those are set up with enough memory for agent work.
+3. Pick a tool: **1 = Claude Code** or **2 = OpenCode**.
 
-These local settings only apply inside that window. A normal `claude` in any other terminal still uses real Claude.
+Switching models is just closing the window and starting again with a different pick.
 
-## Current model
-| Ollama name | What it is | Notes |
-|---|---|---|
-| `qwen3-coder-uncensored-64k` | Huihui Qwen3-Coder-30B-A3B, abliterated (uncensored), i1-Q4_K_M, 64k memory | ~25 GB when running. About 60% sits on the graphics card, the rest in system memory. Supports tools. |
+## Requirements
+- Windows, [Ollama](https://ollama.com) 0.40 or newer, Python 3, and Claude Code and/or OpenCode installed.
+- A model that supports **tool use** (`ollama show <model>` lists `tools` under Capabilities). Without it the model can't act as an agent.
+- Enough memory for the model plus at least 32k of context; 64k is better (see below).
 
-Source: https://hf.co/mradermacher/Huihui-Qwen3-Coder-30B-A3B-Instruct-abliterated-i1-GGUF (the downloaded .gguf was deleted after import; Ollama keeps its own copy, so re-download it only if you need to rebuild).
+## Add a model
+1. Either `ollama pull <model>` from the Ollama library, or download a `.gguf` (e.g. from Hugging Face).
+   `ollama pull hf.co/...` sometimes fails on Hugging Face's download servers; a browser, LM Studio or `curl -L` works instead.
+2. Make a big-memory variant so Claude Code has room to work. Copy `modelfiles\example-64k.Modelfile`, point `FROM` at your model (a library name or a `.gguf` path), and set `RENDERER`/`PARSER` to match the model family. Wrong ones break tool use; run `ollama show <official-model-of-that-family> --modelfile` to see the right ones.
+3. `ollama create <name>-64k -f modelfiles\<name>-64k.Modelfile`. It shows up in the launcher automatically.
+4. Check `ollama show <name>-64k` lists **tools**, then try it with the test kit below.
 
-## Add a new model
-1. Download the `.gguf` into `C:\AI\models\<author>\<model>\`.
-   `ollama pull hf.co/...` can fail on Hugging Face's download servers. Use a browser, LM Studio or `curl -L` instead.
-2. Copy `modelfiles\qwen3-coder-uncensored-64k.Modelfile` and change the `FROM` path.
-   The `RENDERER` and `PARSER` lines must match the model family, otherwise tool use breaks. To see the right ones, run `ollama show <official-model> --modelfile`.
-3. Run `ollama create <name>-64k -f modelfiles\<name>-64k.Modelfile`. It shows up in the launcher automatically.
-4. Run `ollama show <name>-64k` and check that **tools** is listed under Capabilities. Without it the model can't act as an agent.
+The example Modelfile is set up for a Qwen3-Coder-family model (the one this was first tested with: an abliterated Qwen3-Coder-30B-A3B). Swap in whatever fits the work.
 
 ## Plugins and the relay
-- **Relay (`lc_proxy.py`):** Claude Code sends your skill list, the names of extra tools and plugin start-up notes in a block that Ollama silently throws away (about 10k tokens; found 2026-11-14 on Ollama 0.40.16). The launcher starts a small relay on port 11435 that moves that block where Ollama keeps it. Without it the local model never sees your skills or extra tools. It runs in a minimised "LocalCoder relay" window and can be left open. To record what passes through it, start it with `LC_RELAY_LOG` set to a file path.
-- **Trimmed plugin list (`claude-settings.json`):** LocalCoder turns off the heavy plugins (superpowers, creative-writing, frontend-design, context7, claude-md-management) and keeps code-review, feature-dev, Playwright and Forge Neo. That cuts start-up from ~29k to ~22.7k tokens. Edit the file to switch plugins on or off; it only affects LocalCoder, not normal `claude`.
-- **claude.ai connectors** (Gmail, Drive, Calendar…) don't work here: they need your Claude login, which the local setup replaces.
-- `python tests\measure_startup.py <model> [--lean]` shows how many tokens Claude Code uses before any work.
+- **Relay (`lc_proxy.py`).** Claude Code sends the skill list, the names of extra tools and plugin start-up notes in a block that Ollama silently drops (about 10k tokens; found on Ollama 0.40.16). Without it the local model never sees your skills or extra tools. The launcher starts a small relay on port 11435 that moves that block where Ollama keeps it. It runs in a minimised "LocalCoder relay" window and can be left open. Set `LC_RELAY_LOG` to a file path to record what passes through it.
+- **Trimmed plugin list (`claude-settings.json`).** Every plugin adds text the model must read before each task, and local models have far less memory than Claude. This file (passed with `--settings`, LocalCoder only) switches off heavy plugins and keeps a few useful ones. Edit it to match the plugins you have; names you don't have are ignored. In testing, trimming cut start-up from ~29k to ~22.7k tokens.
+- **claude.ai connectors** (Gmail, Drive, Calendar…) don't work here. They need a Claude login, which the local setup replaces.
+- `python tests\measure_startup.py <model> [--lean]` shows how many tokens Claude Code uses before doing any work.
 
 ## Why these settings
-- **Claude Code needs about 23k tokens just to start a task** with the trimmed plugin list (29k with everything on), measured from the Ollama log. Models need at least 32k of memory (`num_ctx`), and 64k is better.
-- The launcher sets `CLAUDE_CODE_MAX_CONTEXT_TOKENS` so Claude Code knows the model's real memory size. Without it, Claude Code assumes 200k and would overflow.
+- **Claude Code needs about 23k tokens just to start a task** with a trimmed plugin list, so models need at least 32k of memory (`num_ctx`), and 64k is better.
+- The launcher sets `CLAUDE_CODE_MAX_CONTEXT_TOKENS` so Claude Code knows the model's real memory size and compacts in time, instead of assuming a huge window and overflowing.
 - `CLAUDE_CODE_MAX_OUTPUT_TOKENS=8192`: the default of 32k would eat half the memory.
-- Every Claude model slot (opus/sonnet/haiku/subagents) points at the local model, so nothing tries to reach Claude.
+- Every Claude model slot (opus/sonnet/haiku/subagents) points at the local model, so nothing tries to reach Anthropic.
 
 ## Test it
-`python tests\run_tests.py <model> [--tools claude,opencode]` runs 4 practice tasks: explain, fix a bug, add a function, rename. Each run gets a fresh copy of `tests\practice`. Results go to `tests\RESULTS.md`, and full logs to `tests\logs\` (not saved to git).
+`python tests\run_tests.py <model> [--tools claude,opencode]` runs 4 small coding tasks (explain, fix a bug, add a function, rename) on a fresh copy of `tests\practice`. Results are appended to `tests\RESULTS.md`; full logs go to `tests\logs\` (not saved to git). The tasks are coding tasks, so they measure tool use and editing, not writing or research quality.
+
+## Known issues
+- Claude Code occasionally crashes at start-up with `I.name.startsWith` before sending any request (about 1 run in 20 in testing). Starting again works.
+- Claude Code prints `unrecognized_model` for local model names. It's harmless.
