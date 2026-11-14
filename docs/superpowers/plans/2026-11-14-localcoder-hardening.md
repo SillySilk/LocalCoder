@@ -26,7 +26,8 @@
 2. **Conversation grows past the model's context** → Claude Code compacts before Ollama truncates; Ollama's log never shows `truncated = 1`. (Task 5.)
 3. **Two models or two agents share a 16 GB card** → a subagent call finishes (possibly slower), it does not crash or deadlock. (Task 6.)
 4. **Low-bit quant writes a tool call as plain text** → the relay turns a recognised pattern into a real tool call; anything unrecognised passes through unchanged. (Task 7 tests both.)
-5. **Fresh clone on a machine without this user's plugins/paths** → `--check` passes and one practice task runs from the clone. (Task 3.)
+5. **No Claude subscription / login** → LocalCoder still runs and compaction is done by the local model. (Tasks 3 and 5.)
+6. **Fresh clone on a machine without this user's plugins/paths** → `--check` passes and one practice task runs from the clone. (Task 3.)
 
 ---
 
@@ -68,7 +69,7 @@
 
 **Files:** Create `tests/fresh_clone_check.py`.
 
-- [ ] **Step 1:** Script clones `https://github.com/SillySilk/LocalCoder` into a temp folder, runs `python lc_launch.py --check` and `python tests/run_tests.py <model> --tools claude --tasks 1-explain` from the clone, with `USERPROFILE`/`HOME` untouched but `PATH` unchanged; asserts both exit 0 and `git status` in the clone is clean afterwards.
+- [ ] **Step 1:** Script clones `https://github.com/SillySilk/LocalCoder` into a temp folder, runs `python lc_launch.py --check` and `python tests/run_tests.py <model> --tools claude --tasks 1-explain` from the clone, with `USERPROFILE`/`HOME` untouched but `PATH` unchanged; asserts both exit 0 and `git status` in the clone is clean afterwards. Run Claude Code with `CLAUDE_CONFIG_DIR` set to a new empty temp folder (no saved Claude login, no user plugins) so the check proves LocalCoder needs no Anthropic account.
 - [ ] **Step 2:** Run it → PASS (fix anything that depended on `C:\AI\LocalCoder`).
 - [ ] **Step 3:** Commit `Add fresh-clone check`.
 
@@ -85,7 +86,7 @@
 
 **Files:** Create `tests/long_session.py`; possibly Modify `lc_launch.py` env.
 
-- [ ] **Step 1:** Script generates a practice copy with ~12 extra 4k-token source files, asks Claude Code (via `lc_launch --yes`, `--output-format stream-json --verbose`) to read every file and write a one-line summary of each into `SUMMARY.md`. Pass = stream contains a `compact_boundary` system event **and** the Ollama `server.log` lines written during the run contain no `truncated = 1` and no `task.n_tokens` above the model's num_ctx, **and** `SUMMARY.md` has one line per file.
+- [ ] **Step 1:** Script generates a practice copy with ~12 extra 4k-token source files, asks Claude Code (via `lc_launch --yes`, `--output-format stream-json --verbose`) to read every file and write a one-line summary of each into `SUMMARY.md`. Pass = stream contains a `compact_boundary` system event **and** the Ollama `server.log` lines written during the run contain no `truncated = 1` and no `task.n_tokens` above the model's num_ctx, **and** `SUMMARY.md` has one line per file, **and** the relay's `LC_RELAY_LOG` shows the compaction (summary) request went to Ollama. While it runs, record outbound connections of the `claude` process (`Get-NetTCPConnection -OwningProcess`); none may go to Anthropic API hosts other than optional telemetry, which is listed if seen.
 - [ ] **Step 2:** Run on `qwen3-coder-uncensored-64k`. If compaction never fires or truncation appears, set `CLAUDE_CODE_AUTO_COMPACT_WINDOW=<num_ctx>` (and, if needed, `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE`) in `lc_launch.main()`, rerun until PASS.
 - [ ] **Step 3:** Commit `Verify compaction before Ollama truncates` (with whichever env change was needed and the measured numbers in the body).
 
