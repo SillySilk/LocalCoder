@@ -67,56 +67,25 @@ def check(task, work, output):
 
 
 ROOT = HERE.parent
-RELAY_PORT = 11435
 
 
-def ensure_relay():
-    """Start lc_proxy.py (same relay LocalCoder.bat uses) if it isn't running."""
-    import urllib.request
-    url = f"http://127.0.0.1:{RELAY_PORT}/api/version"
-    try:
-        urllib.request.urlopen(url, timeout=3)
-        return
-    except OSError:
-        pass
-    subprocess.Popen([sys.executable, str(ROOT / "lc_proxy.py"), str(RELAY_PORT)],
-                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    for _ in range(15):
-        time.sleep(1)
-        try:
-            urllib.request.urlopen(url, timeout=3)
-            return
-        except OSError:
-            pass
-    raise SystemExit("LocalCoder relay did not start")
-
-
-def agent_cmd(tool, model, prompt):
+def agent_cmd(tool, model, prompt, work):
+    """Go through lc_launch.py, exactly like LocalCoder.bat / george do."""
+    base = [sys.executable, str(ROOT / "lc_launch.py"), str(work),
+            "--model", model, "--tool", tool, "--yes", "--"]
     if tool == "claude":
-        return ["ollama", "launch", "claude", "--model", model, "--yes", "--",
-                "--settings", str(ROOT / "claude-settings.json"),
-                "-p", prompt, "--permission-mode", "acceptEdits",
-                "--allowedTools", "Read,Edit,Write,Glob,Grep,Bash(python:*),PowerShell(python:*)"]
-    return ["ollama", "launch", "opencode", "--model", model, "--yes", "--", "run", prompt]
+        return base + ["-p", prompt, "--permission-mode", "acceptEdits",
+                       "--allowedTools", "Read,Edit,Write,Glob,Grep,Bash(python:*),PowerShell(python:*)"]
+    return base + ["run", prompt]
 
 
 def run_one(tool, model, task):
     work = Path(tempfile.mkdtemp(prefix=f"lc-{task}-"))
     shutil.copytree(PRACTICE, work, dirs_exist_ok=True)
     env = None
-    if tool == "claude":
-        import os
-        env = dict(os.environ)
-        for k in ("OPUS", "SONNET", "HAIKU", "FABLE"):
-            env[f"ANTHROPIC_DEFAULT_{k}_MODEL"] = model
-        env["CLAUDE_CODE_SUBAGENT_MODEL"] = model
-        env["CLAUDE_CODE_MAX_OUTPUT_TOKENS"] = "8192"
-        env["CLAUDE_CODE_MAX_CONTEXT_TOKENS"] = "32768" if "-32k" in model else "65536"
-        env["OLLAMA_HOST"] = f"127.0.0.1:{RELAY_PORT}"
-        ensure_relay()
     start = time.time()
     try:
-        r = subprocess.run(agent_cmd(tool, model, TASKS[task]), cwd=work, env=env,
+        r = subprocess.run(agent_cmd(tool, model, TASKS[task], work), cwd=work, env=env,
                            capture_output=True, text=True, encoding="utf-8",
                            errors="replace", timeout=TIMEOUT_S)
         output = r.stdout + r.stderr

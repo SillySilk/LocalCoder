@@ -10,8 +10,10 @@ Regular `claude` is unaffected. The local settings only apply inside the LocalCo
 
 ## Use it
 1. Double-click `LocalCoder.bat` (or drag a project folder onto it). After running `install-command.bat` once, you can also type `george` in any terminal to start in the folder you're in.
-2. Pick a model. Models whose names end in `-64k` or `-32k` are listed first; those are set up with enough memory for agent work.
+2. Pick a model. LocalCoder asks Ollama what each model can do: models ready for agent work are listed first, and models that can't use tools are marked. If the model's memory (context) is too small, it offers to make a 64k version on the spot. That takes seconds and almost no disk space, because it reuses the same model files.
 3. Pick a tool: **1 = Claude Code** or **2 = OpenCode**.
+
+`lc_launch.py` does the work; the `.bat` just calls it. For scripts: `python lc_launch.py <folder> --model <name> --tool claude|opencode --yes [-- extra tool args]`.
 
 Switching models is just closing the window and starting again with a different pick.
 
@@ -23,9 +25,8 @@ Switching models is just closing the window and starting again with a different 
 ## Add a model
 1. Either `ollama pull <model>` from the Ollama library, or download a `.gguf` (e.g. from Hugging Face).
    `ollama pull hf.co/...` sometimes fails on Hugging Face's download servers; a browser, LM Studio or `curl -L` works instead.
-2. Make a big-memory variant so Claude Code has room to work. Copy `modelfiles\example-64k.Modelfile`, point `FROM` at your model (a library name or a `.gguf` path), and set `RENDERER`/`PARSER` to match the model family. Wrong ones break tool use; run `ollama show <official-model-of-that-family> --modelfile` to see the right ones.
-3. `ollama create <name>-64k -f modelfiles\<name>-64k.Modelfile`. It shows up in the launcher automatically.
-4. Check `ollama show <name>-64k` lists **tools**, then try it with the test kit below.
+2. Start LocalCoder and pick it. The launcher creates the big-memory version for you when needed.
+3. If you imported a `.gguf` by hand (`ollama create` with `FROM <file>.gguf`) and it shows "NO TOOL USE", Ollama didn't recognise its chat format. Copy `modelfiles\example-64k.Modelfile`, point `FROM` at the file, and set `RENDERER`/`PARSER` (or `TEMPLATE`) to match the model family; `ollama show <official-model-of-that-family> --modelfile` shows the right ones. Pulling with `ollama pull hf.co/<user>/<repo>:<quant>` usually avoids this.
 
 The example Modelfile is set up for a Qwen3-Coder-family model (the one this was first tested with: an abliterated Qwen3-Coder-30B-A3B). Swap in whatever fits the work.
 
@@ -44,6 +45,10 @@ The example Modelfile is set up for a Qwen3-Coder-family model (the one this was
 ## Test it
 `python tests\run_tests.py <model> [--tools claude,opencode]` runs 4 small coding tasks (explain, fix a bug, add a function, rename) on a fresh copy of `tests\practice`. Results are appended to `tests\RESULTS.md`; full logs go to `tests\logs\` (not saved to git). The tasks are coding tasks, so they measure tool use and editing, not writing or research quality.
 
+## Compatibility
+`python tests\compat_matrix.py` downloads models one at a time, runs the practice tasks in both tools, records the result in `tests\COMPAT.md`, and deletes the model before the next one. It checks that a model works with LocalCoder, not how good it is.
+
 ## Known issues
+- Some models occasionally write a tool call as plain text instead of a real tool call; the agent then stops early. Seen with Qwen3-Coder in OpenCode.
 - Claude Code occasionally crashes at start-up with `I.name.startsWith` before sending any request (about 1 run in 20 in testing). Starting again works.
 - Claude Code prints `unrecognized_model` for local model names. It's harmless.

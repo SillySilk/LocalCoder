@@ -24,25 +24,15 @@ def main():
     ap.add_argument("--lean", action="store_true")
     a = ap.parse_args()
 
-    env = dict(os.environ)
-    for k in ("OPUS", "SONNET", "HAIKU", "FABLE"):
-        env[f"ANTHROPIC_DEFAULT_{k}_MODEL"] = a.model
-    env["CLAUDE_CODE_SUBAGENT_MODEL"] = a.model
-    env["CLAUDE_CODE_MAX_OUTPUT_TOKENS"] = "8192"
-    env["CLAUDE_CODE_MAX_CONTEXT_TOKENS"] = "32768" if "-32k" in a.model else "65536"
-
     extra = ["-p", "Reply with the single word: ready", "--output-format", "stream-json", "--verbose"]
-    if a.lean:
-        extra += ["--settings", str(ROOT / "claude-settings.json")]
-    sys.path.insert(0, str(ROOT / "tests"))
-    from run_tests import RELAY_PORT, ensure_relay
-    ensure_relay()
-    env["OLLAMA_HOST"] = f"127.0.0.1:{RELAY_PORT}"
-
+    settings = ROOT / "claude-settings.json"
+    if not a.lean:  # lc_launch always applies the trimmed list; an empty override restores everything
+        settings = Path(tempfile.mkdtemp()) / "all-plugins.json"
+        settings.write_text("{}", encoding="utf-8")
     work = tempfile.mkdtemp(prefix="lc-measure-")
-    r = subprocess.run(["ollama", "launch", "claude", "--model", a.model, "--yes", "--", *extra],
-                       cwd=work, env=env, capture_output=True, text=True,
-                       encoding="utf-8", errors="replace", timeout=900)
+    r = subprocess.run([sys.executable, str(ROOT / "lc_launch.py"), work, "--model", a.model,
+                        "--tool", "claude", "--yes", "--", *extra, "--settings", str(settings)],
+                       capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=900)
     init = result = None
     for line in r.stdout.splitlines():
         try:
