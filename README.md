@@ -45,6 +45,9 @@ The example Modelfile is set up for a Qwen3-Coder-family model (the one this was
 ## Test it
 `python tests\run_tests.py <model> [--tools claude,opencode]` runs 4 small coding tasks (explain, fix a bug, add a function, rename) on a fresh copy of `tests\practice`. Results are appended to `tests\RESULTS.md`; full logs go to `tests\logs\` (not saved to git). The tasks are coding tasks, so they measure tool use and editing, not writing or research quality.
 
+## Check your setup
+`python lc_launch.py --check` (or `george --check`) reports Ollama, Claude Code, OpenCode, the relay, and every installed model's tool support and memory. "note" lines are fine; only "FAIL" means something is broken.
+
 ## Compatibility
 `python tests\compat_matrix.py` downloads models one at a time, runs the practice tasks in both tools, records the result in `tests\COMPAT.md`, and deletes the model before the next one. It checks that a model works with LocalCoder, not how good it is.
 

@@ -27,7 +27,8 @@ WANT_CTX = 65536       # comfortable default for agent work
 
 # ---------- Ollama helpers ----------
 
-def api(path, body=None, base=OLLAMA, timeout=30):
+def api(path, body=None, base=None, timeout=30):
+    base = base or OLLAMA
     data = json.dumps(body).encode() if body is not None else None
     req = urllib.request.Request(base + path, data=data,
                                  headers={"Content-Type": "application/json"})
@@ -156,6 +157,76 @@ def start_relay(upstream=None):
     return proc, int(line[1])
 
 
+# ---------- diagnostics ----------
+
+MIN_OLLAMA = (0, 40)
+
+
+def _version_tuple(v):
+    out = []
+    for part in v.split(".")[:2]:
+        digits = "".join(ch for ch in part if ch.isdigit())
+        out.append(int(digits or 0))
+    return tuple(out)
+
+
+def run_checks():
+    """Everything LocalCoder depends on, as (name, status, detail) rows.
+
+    status is "ok", "warn" (works, but worth knowing) or "fail" (broken).
+    """
+    import shutil
+    rows = []
+    try:
+        v = api("/api/version", timeout=5).get("version", "?")
+    except OSError as e:
+        return [("Ollama", "fail", f"not reachable at {OLLAMA} ({e})")]
+    new_enough = _version_tuple(v) >= MIN_OLLAMA
+    rows.append(("Ollama", "ok" if new_enough else "fail", v if new_enough else f"{v}; needs 0.40 or newer"))
+    for exe in ("claude", "opencode"):
+        path = shutil.which(exe)
+        rows.append((exe, "ok" if path else "warn", path or "not installed (only needed to use it)"))
+    try:
+        proc, port = start_relay(OLLAMA)
+        try:
+            api("/api/version", base=f"http://127.0.0.1:{port}", timeout=5)
+            rows.append(("relay", "ok", f"started on port {port}"))
+        finally:
+            proc.terminate()
+            proc.wait(timeout=10)
+            proc.stdout.close()
+    except (OSError, SystemExit) as e:
+        rows.append(("relay", "fail", f"did not start ({e})"))
+    for m in api("/api/tags").get("models", []):
+        try:
+            f = model_facts(m["name"])
+        except (OSError, ValueError) as e:
+            rows.append((f"model {m['name']}", "warn", f"could not read ({e})"))
+            continue
+        if f["embedding_only"]:
+            continue
+        problems = []
+        if not f["tools"]:
+            problems.append("no tool use")
+        if (f["num_ctx"] or 0) < MIN_CTX:
+            have = f"{f['num_ctx'] // 1024}k" if f["num_ctx"] else "default"
+            problems.append(f"{have} memory; launcher will offer a {WANT_CTX // 1024}k version")
+        rows.append((f"model {f['name']}", "warn" if problems else "ok", "; ".join(problems) or describe(f)))
+    return rows
+
+
+def checks_passed(rows):
+    return all(status != "fail" for _, status, _ in rows)
+
+
+def print_checks(rows):
+    width = max(len(r[0]) for r in rows)
+    mark = {"ok": "OK  ", "warn": "note", "fail": "FAIL"}
+    for name, status, detail in rows:
+        print(f"  {mark[status]}  {name.ljust(width)}  {detail}")
+    return checks_passed(rows)
+
+
 # ---------- interaction ----------
 
 def ask(prompt, default):
@@ -218,7 +289,10 @@ def main():
     ap.add_argument("--model")
     ap.add_argument("--tool", choices=["claude", "opencode"])
     ap.add_argument("--yes", action="store_true", help="no questions; accept defaults")
+    ap.add_argument("--check", action="store_true", help="check the setup and exit")
     a = ap.parse_args(argv)
+    if a.check:
+        sys.exit(0 if print_checks(run_checks()) else 1)
 
     folder = Path(a.folder or os.getcwd())
     if not folder.is_dir():
