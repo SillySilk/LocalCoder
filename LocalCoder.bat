@@ -104,5 +104,26 @@ echo.
 echo Launching %INTEGRATION% with %MODEL% in "%WORKDIR%"
 echo.
 cd /d "%WORKDIR%"
-ollama launch %INTEGRATION% --model %MODEL%
+if not "%INTEGRATION%"=="claude" (
+    ollama launch %INTEGRATION% --model %MODEL%
+    goto :done
+)
+
+REM ---- Claude Code goes through the LocalCoder relay so Ollama keeps the
+REM ---- skill list / tool list / hook notes, and uses the trimmed plugin list
+curl -s -o nul http://127.0.0.1:11435/api/version
+if errorlevel 1 (
+    start "LocalCoder relay" /min python "%~dp0lc_proxy.py" 11435
+    for /l %%i in (1,1,15) do (
+        curl -s -o nul http://127.0.0.1:11435/api/version && goto :relay_up
+        timeout /t 1 /nobreak >nul
+    )
+    echo The LocalCoder relay did not start. Check that Python is installed.
+    pause
+    exit /b 1
+)
+:relay_up
+set "OLLAMA_HOST=127.0.0.1:11435"
+ollama launch claude --model %MODEL% -- --settings "%~dp0claude-settings.json"
+:done
 endlocal

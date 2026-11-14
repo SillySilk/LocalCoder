@@ -66,9 +66,35 @@ def check(task, work, output):
     raise ValueError(task)
 
 
+ROOT = HERE.parent
+RELAY_PORT = 11435
+
+
+def ensure_relay():
+    """Start lc_proxy.py (same relay LocalCoder.bat uses) if it isn't running."""
+    import urllib.request
+    url = f"http://127.0.0.1:{RELAY_PORT}/api/version"
+    try:
+        urllib.request.urlopen(url, timeout=3)
+        return
+    except OSError:
+        pass
+    subprocess.Popen([sys.executable, str(ROOT / "lc_proxy.py"), str(RELAY_PORT)],
+                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    for _ in range(15):
+        time.sleep(1)
+        try:
+            urllib.request.urlopen(url, timeout=3)
+            return
+        except OSError:
+            pass
+    raise SystemExit("LocalCoder relay did not start")
+
+
 def agent_cmd(tool, model, prompt):
     if tool == "claude":
         return ["ollama", "launch", "claude", "--model", model, "--yes", "--",
+                "--settings", str(ROOT / "claude-settings.json"),
                 "-p", prompt, "--permission-mode", "acceptEdits",
                 "--allowedTools", "Read,Edit,Write,Glob,Grep,Bash(python:*),PowerShell(python:*)"]
     return ["ollama", "launch", "opencode", "--model", model, "--yes", "--", "run", prompt]
@@ -86,6 +112,8 @@ def run_one(tool, model, task):
         env["CLAUDE_CODE_SUBAGENT_MODEL"] = model
         env["CLAUDE_CODE_MAX_OUTPUT_TOKENS"] = "8192"
         env["CLAUDE_CODE_MAX_CONTEXT_TOKENS"] = "32768" if "-32k" in model else "65536"
+        env["OLLAMA_HOST"] = f"127.0.0.1:{RELAY_PORT}"
+        ensure_relay()
     start = time.time()
     try:
         r = subprocess.run(agent_cmd(tool, model, TASKS[task]), cwd=work, env=env,
