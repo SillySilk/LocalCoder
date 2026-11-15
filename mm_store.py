@@ -92,4 +92,5 @@ def delete_plan(names):
             others[other] = shared
     still_used = set().union(*others.values()) if others else set()
     freed = sum(size for d, size in mine.items() if d not in still_used)
-    return {"freed": freed, "shared_with": sorted(others)}
+    shared = sum(size for d, size in mine.items() if d in still_used)
+    return {"freed": freed, "shared_with": sorted(others), "shared_bytes": shared}

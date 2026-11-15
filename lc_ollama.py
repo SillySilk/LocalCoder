@@ -164,4 +164,8 @@ def running():
 
 
 def unload(name):
+    """Free the model's memory. A model that isn't installed or loaded is
+    already unloaded, so that's not an error."""
+    if canonical(name) not in {canonical(m["name"]) for m in running()}:
+        return
     call("/api/generate", {"model": name, "keep_alive": 0})

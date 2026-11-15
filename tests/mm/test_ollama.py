@@ -51,3 +51,28 @@ def test_call_restarts_once(monkeypatch):
     with pytest.raises(OllamaError, match="Ollama stopped"):
         call("/api/version")
     assert len(starts) == 1
+
+
+@pytest.fixture
+def embed_model():
+    name = "all-minilm:latest"
+    had = name in [m["name"] for m in installed()]
+    if not had:
+        pull(name, lambda *a: None)
+    yield name
+    if not had:
+        lc_ollama.delete(name)
+
+
+def test_unload_embedding_model(embed_model):
+    call("/api/embed", {"model": embed_model, "input": "hi"}, timeout=120)
+    assert embed_model in [m["name"] for m in running()]
+    unload(embed_model)
+    deadline = time.time() + 10
+    while time.time() < deadline and embed_model in [m["name"] for m in running()]:
+        time.sleep(0.5)
+    assert embed_model not in [m["name"] for m in running()]
+
+
+def test_unload_already_gone():
+    unload("mm-not-loaded")

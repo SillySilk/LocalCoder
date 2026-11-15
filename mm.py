@@ -335,8 +335,9 @@ def delete_screen():
     plan = delete_plan(names)
     print("\nThis deletes: " + ", ".join(short(n) for n in names))
     print(f"Disk space you get back: {human(plan['freed'])}")
-    if plan["shared_with"]:
-        print("These share files with: " + ", ".join(short(n) for n in plan["shared_with"]) +
+    if plan["shared_with"] and plan["shared_bytes"] >= 100 * 10**6:
+        print(f"These share {human(plan['shared_bytes'])} with: " +
+              ", ".join(short(n) for n in plan["shared_with"]) +
               ". That space only comes back when those are deleted too.")
     if ask_yes("Delete?"):
         for n in names:
@@ -357,9 +358,13 @@ def unload_screen():
     if pick is None:
         return
     chosen = models if pick == len(models) + 1 else [models[pick - 1]]
+    failed = []
     for m in chosen:
-        unload(m["name"])
-    print("Unloaded.")
+        try:
+            unload(m["name"])
+        except OllamaError as e:
+            failed.append(f"{short(m['name'])} ({e})")
+    print("Unloaded." if not failed else "Unloaded the rest. Couldn't unload: " + ", ".join(failed))
 
 
 def show_memory(v):

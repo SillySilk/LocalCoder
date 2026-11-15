@@ -131,3 +131,17 @@ def test_fallback_checks_downloads_space(monkeypatch, capsys):
     feed(monkeypatch, ["y"])
     mm.download_model("hf.co/u/r:Q4", 5 * 10**9, hf=("u/r", ["r-Q4.gguf"]))
     assert called == [] and "Not enough disk space" in capsys.readouterr().out
+
+
+def _delete_screen_output(monkeypatch, capsys, shared_bytes):
+    monkeypatch.setattr(mm, "installed", lambda: [{"name": "a:latest", "size": 10}])
+    monkeypatch.setattr(mm, "delete_plan", lambda names: {"freed": 10, "shared_with": ["b:latest"],
+                                                          "shared_bytes": shared_bytes})
+    feed(monkeypatch, ["1", "n"])
+    mm.delete_screen()
+    return capsys.readouterr().out
+
+
+def test_shared_note_only_when_it_matters(monkeypatch, capsys):
+    assert "share" not in _delete_screen_output(monkeypatch, capsys, 50_000)
+    assert "share 2.0 GB with" in _delete_screen_output(monkeypatch, capsys, 2 * 10**9)
