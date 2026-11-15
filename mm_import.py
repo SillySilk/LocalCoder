@@ -43,6 +43,19 @@ def blob_digest(path, on_progress=None):
     return f"sha256:{h.hexdigest()}"
 
 
+class Throttle:
+    """Pass progress on only every `every_bytes`, and always at the end,
+    so a big import doesn't spend minutes redrawing the progress line."""
+
+    def __init__(self, on_progress, every_bytes=64 << 20):
+        self.cb, self.every, self.last = on_progress, every_bytes, None
+
+    def __call__(self, step, done, total):
+        if self.last is None or done - self.last >= self.every or done >= total:
+            self.last = done
+            self.cb(step, done, total)
+
+
 class _Reader:
     def __init__(self, f, total, on_progress):
         self.f, self.total, self.done, self.cb = f, total, 0, on_progress
@@ -79,6 +92,7 @@ def import_gguf(path, name, on_progress):
     path = Path(path)
     if not path.is_file():
         raise OllamaError(f"File not found: {path}")
+    on_progress = Throttle(on_progress)
     digest = blob_digest(path, on_progress)
     _upload(path, digest, on_progress)
     on_progress("Creating the model", 0, 0)

@@ -110,6 +110,19 @@ def enough_space(size):
     return True
 
 
+def enough_for_direct(size):
+    """The direct download needs room in Downloads, then again in the models folder."""
+    downloads, models = Path.home() / "Downloads", models_dir()
+    same = Path(downloads.anchor).resolve() == Path(models.anchor).resolve()
+    need = {downloads: size * 2} if same else {downloads: size, models: size}
+    for folder, amount in need.items():
+        free = free_space(folder)
+        if size and free < amount:
+            print(f"Not enough disk space: {folder} needs {human(amount)} and {human(free)} is free.")
+            return False
+    return True
+
+
 def download_model(name, size=None, hf=None):
     """hf: (repo, files) for a Hugging Face model, so a failed pull can fall back
     to downloading the file directly, if the user agrees."""
@@ -126,6 +139,8 @@ def download_model(name, size=None, hf=None):
         if not hf or not ask_yes("Download the file directly instead, then import it?"):
             return
         repo, files = hf
+        if not enough_for_direct(size):
+            return
         path = download_file(repo, files[0], Path.home() / "Downloads",
                              lambda d, t: progress("Downloading", d, t))
         done_line()

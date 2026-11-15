@@ -70,3 +70,13 @@ def test_fix_tools_no_donor(tiny_gguf):
     if others:
         pytest.skip(f"another {arch} model with tool use is installed: {others}")
     assert fix_tools("mm-test-bad") is None
+
+
+def test_throttle():
+    from mm_import import Throttle
+    calls = []
+    t = Throttle(lambda step, d, tot: calls.append(d), every_bytes=1 << 20)
+    total = 1000 * 8192
+    for i in range(1, 1001):
+        t("Copying", i * 8192, total)
+    assert 7 <= len(calls) <= 9 and calls[-1] == total

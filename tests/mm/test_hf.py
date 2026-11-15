@@ -73,3 +73,19 @@ def test_helper_files_are_not_sizes():
 
 def test_search_has_dates():
     assert all(r["updated"] for r in search("SmolLM2-135M-Instruct", limit=3))
+
+
+def test_complete_part_file_finishes(tmp_path):
+    done = download_file(TINY_REPO, TINY_FILE, tmp_path, lambda d, t: None)
+    part = done.with_name(done.name + ".part")
+    done.rename(part)
+    out = download_file(TINY_REPO, TINY_FILE, tmp_path, lambda d, t: None)
+    assert out.stat().st_size == TINY_SIZE and not part.exists()
+
+
+def test_oversized_part_restarts(tmp_path):
+    part = tmp_path / (TINY_FILE + ".part")
+    with open(part, "wb") as f:
+        f.truncate(200 * 10**6)
+    out = download_file(TINY_REPO, TINY_FILE, tmp_path, lambda d, t: None)
+    assert out.stat().st_size == TINY_SIZE

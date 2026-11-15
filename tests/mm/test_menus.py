@@ -114,3 +114,20 @@ def test_ctrl_c_during_startup(monkeypatch):
         raise KeyboardInterrupt
     monkeypatch.setattr(mm, "start_ollama", stop)
     mm.main()
+
+
+def test_fallback_checks_downloads_space(monkeypatch, capsys):
+    from lc_ollama import OllamaError
+    called = []
+
+    def fail(*a):
+        raise OllamaError("server busy")
+
+    monkeypatch.setattr(mm, "have", lambda n: False)
+    monkeypatch.setattr(mm, "pull", fail)
+    monkeypatch.setattr(mm, "free_space", lambda p: 0 if "Downloads" in str(p) else 10**12)
+    monkeypatch.setattr(mm, "download_file", lambda *a: called.append("download"))
+    monkeypatch.setattr(mm, "import_gguf", lambda *a: called.append("import"))
+    feed(monkeypatch, ["y"])
+    mm.download_model("hf.co/u/r:Q4", 5 * 10**9, hf=("u/r", ["r-Q4.gguf"]))
+    assert called == [] and "Not enough disk space" in capsys.readouterr().out
