@@ -2,6 +2,7 @@
 
 import json
 import os
+import sqlite3
 from pathlib import Path
 
 from lc_ollama import canonical, installed
@@ -23,8 +24,28 @@ def user_env(key):
         return None
 
 
+APP_DB = Path(os.environ.get("LOCALAPPDATA", "")) / "Ollama" / "db.sqlite"
+
+
+def app_setting(column):
+    """A value from the Ollama app's own settings (what its Settings screen
+    changes), or None. The app passes these to Ollama when it starts, and they
+    win over Windows user settings."""
+    if not APP_DB.exists():
+        return None
+    try:
+        con = sqlite3.connect(f"file:{APP_DB}?mode=ro", uri=True)
+        try:
+            row = con.execute(f"SELECT {column} FROM settings WHERE id = 1").fetchone()
+        finally:
+            con.close()
+    except sqlite3.Error:
+        return None
+    return row[0] if row else None
+
+
 def models_dir():
-    folder = user_env("OLLAMA_MODELS") or os.environ.get("OLLAMA_MODELS")
+    folder = app_setting("models") or user_env("OLLAMA_MODELS") or os.environ.get("OLLAMA_MODELS")
     return Path(folder) if folder else Path.home() / ".ollama" / "models"
 
 
