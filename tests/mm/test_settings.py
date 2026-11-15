@@ -53,6 +53,7 @@ def test_move_models_refuses_when_full(tmp_path, monkeypatch):
     (src / "blobs").mkdir(parents=True)
     (src / "blobs" / "a").write_bytes(b"x" * 100)
     monkeypatch.setattr(mm_settings, "free_space", lambda p: 0)
+    monkeypatch.setattr(mm_settings, "same_drive", lambda a, b: False)  # a move to another drive copies
     with pytest.raises(mm_settings.SettingsError, match="not enough space"):
         move_models(src, tmp_path / "dst", lambda d, t: None)
     assert (src / "blobs" / "a").exists()

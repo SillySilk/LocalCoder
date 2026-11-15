@@ -21,6 +21,7 @@ from pathlib import Path
 
 from lc_ollama import ollama_up
 from mm_fit import free_space, human
+import mm_store
 from mm_store import APP_DB, app_setting, user_env
 
 try:
@@ -48,7 +49,7 @@ class SettingsError(Exception):
 def read():
     ctx = app_setting("context_length")
     return {
-        "models_folder": app_setting("models") or user_env("OLLAMA_MODELS") or str(DEFAULT_MODELS),
+        "models_folder": mm_store.models_folder(),
         "memory": str(ctx) if ctx else user_env("OLLAMA_CONTEXT_LENGTH"),
         "stay_loaded": user_env("OLLAMA_KEEP_ALIVE"),
     }
@@ -201,6 +202,10 @@ def check_folder(folder):
     return folder
 
 
+def same_drive(a, b):
+    return Path(a).drive.lower() == Path(b).drive.lower()
+
+
 def _inside(child, parent):
     child, parent = Path(child).resolve(), Path(parent).resolve()
     return child == parent or parent in child.parents
@@ -237,7 +242,7 @@ def move_models(src, dst, on_progress):
              for p in (src / part).rglob("*") if p.is_file()]
     total = sum(p.stat().st_size for p in files)
     free = free_space(dst)
-    if free < total:
+    if not same_drive(src, dst) and free < total:  # same drive: files are only renamed
         raise SettingsError(f"There's not enough space in {dst}: it needs {human(total)}, "
                             f"and {human(free)} is free.")
     done = moved = 0

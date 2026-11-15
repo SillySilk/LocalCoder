@@ -34,7 +34,7 @@ def app_setting(column):
     if not APP_DB.exists():
         return None
     try:
-        con = sqlite3.connect(f"file:{APP_DB}?mode=ro", uri=True)
+        con = sqlite3.connect(APP_DB.as_uri() + "?mode=ro", uri=True)
         try:
             row = con.execute(f"SELECT {column} FROM settings WHERE id = 1").fetchone()
         finally:
@@ -44,9 +44,28 @@ def app_setting(column):
     return row[0] if row else None
 
 
+def system_env(key):
+    """A Windows setting for all users on this PC, or None."""
+    if winreg is None:
+        return None
+    try:
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,
+                            r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment") as k:
+            return winreg.QueryValueEx(k, key)[0] or None
+    except OSError:
+        return None
+
+
+def models_folder():
+    """Where Ollama keeps models, in the order Ollama itself uses: the Ollama
+    app's setting, then this user's Windows setting, then the all-users one,
+    then the default."""
+    return (app_setting("models") or user_env("OLLAMA_MODELS") or system_env("OLLAMA_MODELS")
+            or str(Path.home() / ".ollama" / "models"))
+
+
 def models_dir():
-    folder = app_setting("models") or user_env("OLLAMA_MODELS") or os.environ.get("OLLAMA_MODELS")
-    return Path(folder) if folder else Path.home() / ".ollama" / "models"
+    return Path(models_folder())
 
 
 def manifest_candidates(name):

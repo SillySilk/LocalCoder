@@ -140,3 +140,41 @@ def test_ollama_is_started_from_home(monkeypatch):
     monkeypatch.setattr(mm_settings.subprocess, "Popen", FakePopen)
     mm_settings.start_ollama_fresh()
     assert seen == [str(Path.home()), str(Path.home())]
+
+
+# Polish Task 5
+def test_same_drive():
+    assert mm_settings.same_drive(Path("c:/a"), Path("C:/b")) is True
+    assert mm_settings.same_drive(Path("C:/a"), Path("D:/b")) is False
+
+
+def test_same_drive_move_needs_no_space(tmp_path, monkeypatch):
+    src, dst = tmp_path / "src", tmp_path / "dst"
+    (src / "blobs").mkdir(parents=True)
+    (src / "blobs" / "a").write_bytes(b"x" * 100)
+    monkeypatch.setattr(mm_settings, "free_space", lambda p: 0)
+    move_models(src, dst, lambda d, t: None)
+    assert (dst / "blobs" / "a").exists()
+
+
+def test_read_order(monkeypatch):
+    import mm_store
+    monkeypatch.setattr(mm_store, "app_setting", lambda c: None)
+    monkeypatch.setattr(mm_settings, "app_setting", lambda c: None)
+    monkeypatch.setattr(mm_store, "user_env", lambda k: None)
+    monkeypatch.setattr(mm_store, "system_env", lambda k: "D:\m" if k == "OLLAMA_MODELS" else None)
+    assert mm_settings.read()["models_folder"] == "D:\m"
+    assert str(mm_store.models_dir()) == "D:\m"
+    monkeypatch.setattr(mm_store, "app_setting", lambda c: "E:\n" if c == "models" else None)
+    assert mm_settings.read()["models_folder"] == "E:\n"
+
+
+def test_app_setting_odd_path(tmp_path, monkeypatch):
+    import shutil
+    import mm_store
+    real = mm_store.app_setting("models")
+    odd = tmp_path / "a#b"
+    odd.mkdir()
+    shutil.copy(mm_store.APP_DB, odd / "db.sqlite")
+    monkeypatch.setattr(mm_store, "APP_DB", odd / "db.sqlite")
+    assert mm_store.app_setting("models") == real
