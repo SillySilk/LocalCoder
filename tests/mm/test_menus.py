@@ -102,3 +102,15 @@ def test_hidden_count_only_counts_too_big(monkeypatch, capsys):
     mm.search_screen()
     out = capsys.readouterr().out
     assert "3 hidden" in out and "2 more" in out
+
+
+def test_ask_number_rejects_superscript(monkeypatch):
+    feed(monkeypatch, ["²", "1"])
+    assert mm.ask_number("Pick", 3, None) == 1
+
+
+def test_ctrl_c_during_startup(monkeypatch):
+    def stop():
+        raise KeyboardInterrupt
+    monkeypatch.setattr(mm, "start_ollama", stop)
+    mm.main()

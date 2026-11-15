@@ -37,7 +37,7 @@ def ask_number(prompt, count, default, zero="back"):
     """A number from 1 to count. 0 means go back (None). Blank takes the default."""
     while True:
         text = ask(f"{prompt} (0 = {zero})", None if default is None else str(default))
-        if text.isdigit() and 0 <= int(text) <= count:
+        if text.isascii() and text.isdecimal() and 0 <= int(text) <= count:
             return int(text) or None
         print(f"  Please type a number from 0 to {count}.")
 
@@ -451,8 +451,12 @@ def main():
     for stream in (sys.stdout, sys.stderr):
         if hasattr(stream, "reconfigure"):
             stream.reconfigure(errors="replace")  # never crash on a character the window can't show
-    start_ollama()
-    VRAM = graphics_memory()
+    try:
+        start_ollama()
+        VRAM = graphics_memory()
+    except (KeyboardInterrupt, EOFError):
+        print()
+        return
     while True:
         try:
             try:
