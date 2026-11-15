@@ -71,3 +71,34 @@ def test_my_models_prints_in_old_windows_encoding(tiny_model):
                        timeout=60, env={**os.environ, "PYTHONIOENCODING": "cp1252"})
     assert r.returncode == 0, r.stderr.decode(errors="replace")
     assert b"Traceback" not in r.stderr
+
+
+def test_search_hides_models_that_cannot_run(monkeypatch):
+    big = [{"quant": "Q4_K_M", "size": 18 * 10**9, "split": False}]
+    ok = [{"quant": "Q3_K_M", "size": 13 * 10**9, "split": False},
+          {"quant": "Q4_K_M", "size": 16.5 * 10**9, "split": False}]
+    results = [{"repo": "a/too-big"}, {"repo": "b/tight-ok"}]
+    shown = mm.runnable_results(results, {"a/too-big": big, "b/tight-ok": ok}, 16 * 1024**3)
+    assert [r["repo"] for r in shown] == ["b/tight-ok"]
+    assert shown[0]["best"]["quant"] == "Q3_K_M"  # largest that fits; 16.5 GB is only "tight"
+
+
+def test_search_finds_tiny_and_marks_best(monkeypatch, capsys):
+    mm.VRAM = 16380 * 1024**2
+    feed(monkeypatch, ["SmolLM2-135M-Instruct", "0"])
+    mm.search_screen()
+    out = capsys.readouterr().out
+    assert "bartowski/SmolLM2-135M-Instruct-GGUF" in out and "best fit" in out
+
+
+def test_hidden_count_only_counts_too_big(monkeypatch, capsys):
+    mm.VRAM = 16380 * 1024**2
+    found = [{"repo": f"r/{i}", "downloads": 1, "updated": "2026-01-01", "gated": False} for i in range(25)]
+    sizes = {f"r/{i}": [{"quant": "Q4_K_M", "size": (5 if i < 22 else 30) * 10**9, "split": False, "files": ["x"]}]
+             for i in range(25)}
+    monkeypatch.setattr(mm, "search", lambda w, limit=40: found)
+    monkeypatch.setattr(mm, "_sizes_for", lambda repos: sizes)
+    feed(monkeypatch, ["x", "0"])
+    mm.search_screen()
+    out = capsys.readouterr().out
+    assert "3 hidden" in out and "2 more" in out

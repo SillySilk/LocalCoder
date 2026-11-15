@@ -31,3 +31,13 @@ def test_recommended():
 def test_human():
     assert human(105454432) == "105 MB"
     assert human(4_900_000_000) == "4.9 GB"
+
+
+def test_usable_keeps_fits_and_tight():
+    from mm_fit import usable
+    qs = [{"quant": "Q3", "size": 11 * 10**9, "split": False},
+          {"quant": "Q4", "size": 15 * 10**9, "split": False},
+          {"quant": "Q6", "size": 22 * 10**9, "split": False},
+          {"quant": "Q8", "size": 12 * 10**9, "split": True}]
+    assert [q["quant"] for q in usable(qs, 16 * 10**9)] == ["Q3", "Q4"]
+    assert [q["quant"] for q in usable(qs, None)] == ["Q3", "Q4", "Q6"]

@@ -11,6 +11,7 @@ HF = "https://huggingface.co"
 UA = {"User-Agent": "LocalCoder-ModelManager"}
 
 QUANT = re.compile(r"(?<![A-Za-z0-9])(I?Q\d(?:_[A-Z0-9]+)*|F16|BF16|F32)(?=[-.])", re.I)
+HELPERS = ("mtp-", "dflash-", "draft-")
 SPLIT = re.compile(r"-\d{5}-of-\d{5}\.gguf$", re.I)
 
 
@@ -39,8 +40,9 @@ def _json(url):
 
 
 def search(words, limit=20):
-    q = urllib.parse.urlencode({"search": words, "filter": "gguf", "sort": "downloads",
-                                "direction": "-1", "limit": limit})
+    q = urllib.parse.urlencode([("search", words), ("filter", "gguf"), ("sort", "downloads"),
+                                ("direction", "-1"), ("limit", limit), ("expand[]", "downloads"),
+                                ("expand[]", "lastModified"), ("expand[]", "gated")])
     return [{"repo": m["id"], "downloads": m.get("downloads", 0),
              "updated": (m.get("lastModified") or "")[:10], "gated": bool(m.get("gated"))}
             for m in _json(f"{HF}/api/models?{q}")]
@@ -59,7 +61,10 @@ def quants(repo):
         path = f.get("path", "")
         if f.get("type") != "file" or not path.lower().endswith(".gguf"):
             continue
-        if "mmproj" in Path(path).name.lower():
+        base = Path(path).name.lower()
+        # Helper files that sit next to a model and can't run on their own:
+        # image readers (mmproj) and speed-up drafts (mtp, dflash, draft).
+        if "mmproj" in base or base.startswith(HELPERS):
             continue
         q = quant_of(path)
         if not q:

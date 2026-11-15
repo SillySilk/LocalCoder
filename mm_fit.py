@@ -38,6 +38,11 @@ def recommended(quants, vram):
     return pick["quant"]
 
 
+def usable(quants, vram):
+    """Sizes worth showing: whole files that fit or are tight (all whole files if the card is unknown)."""
+    return [q for q in quants if not q["split"] and (vram is None or fit_label(q["size"], vram) != "too big, will be slow")]
+
+
 def free_space(folder):
     folder = Path(folder)
     while not folder.exists() and folder != folder.parent:

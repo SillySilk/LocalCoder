@@ -9,10 +9,11 @@ import sys
 from pathlib import Path
 
 import traceback
+from concurrent.futures import ThreadPoolExecutor
 
 from lc_ollama import (OllamaError, call, canonical, delete, facts, installed, pull, running,
                        start_ollama, unload)
-from mm_fit import fit_label, free_space, graphics_memory, human, recommended
+from mm_fit import fit_label, free_space, graphics_memory, human, recommended, usable
 from mm_hf import HFError, download_file, ollama_name, quants, search
 from mm_import import (clean_path, find_ggufs, fix_tools, import_gguf, missing_family_hint,
                        suggest_name)
@@ -179,43 +180,89 @@ def my_models():
     ask("\nPress Enter to go back")
 
 
+def runnable_results(results, quants_by_repo, vram):
+    """Only models with at least one size that fits or is tight, each with its best size."""
+    out = []
+    for r in results:
+        entries = quants_by_repo.get(r["repo"]) or []
+        ok = usable(entries, vram)
+        if not ok:
+            continue
+        rec = recommended(entries, vram)
+        best = next((e for e in ok if e["quant"] == rec), ok[-1])
+        out.append({**r, "entries": entries, "best": best})
+    return out
+
+
+def _sizes_for(repos):
+    def one(repo):
+        try:
+            return repo, quants(repo)
+        except HFError:
+            return repo, []
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        return dict(pool.map(one, repos))
+
+
 def search_screen():
     words = ask("\nSearch Hugging Face for (e.g. qwen coder)")
     if not words:
         return
-    results = search(words)
-    if not results:
+    found = search(words, limit=40)
+    if not found:
         print("Nothing found. Try fewer or different words.")
+        return
+    print("Checking sizes against your graphics card...")
+    runnable = runnable_results(found, _sizes_for([r["repo"] for r in found]), VRAM)
+    results = runnable[:20]
+    hidden = len(found) - len(runnable)
+    more = len(runnable) - len(results)
+    if not results:
+        print("Found models, but none come in a size your graphics card can run. Try a smaller model.")
         return
     print()
     for i, r in enumerate(results, 1):
         gated = "  (needs a Hugging Face login)" if r["gated"] else ""
-        print(f"  {i:>2}) {r['repo']}  ({r['downloads']:,} downloads, updated {r['updated']}){gated}")
+        b = r["best"]
+        best = f"best fit {b['quant']} {human(b['size'])}" if VRAM else f"smallest {b['quant']} {human(b['size'])}"
+        print(f"  {i:>2}) {r['repo']}  ({best}; {r['downloads']:,} downloads, updated {r['updated']}){gated}")
+    if hidden and VRAM:
+        print(f"  ({hidden} hidden: too big for your graphics card, or no files Ollama can use)")
+    if more:
+        print(f"  ({more} more that would run; add words to narrow the search)")
     pick = ask_number("Model number", len(results), None)
     if pick is None:
         return
-    repo = results[pick - 1]["repo"]
-    entries = quants(repo)
-    if not entries:
-        print("That one has no model files Ollama can use.")
-        return
-    rec = recommended(entries, VRAM)
-    print(f"\nSizes for {repo}:" + ("" if VRAM else "  (graphics memory unknown, so no fit check)"))
-    for i, e in enumerate(entries, 1):
-        if e["split"]:
-            note = "comes in pieces, not supported yet"
-        else:
-            note = fit_label(e["size"], VRAM) + ("  (recommended)" if e["quant"] == rec else "")
-        print(f"  {i:>2}) {e['quant']:<10} {human(e['size']):>8}  {note}")
-    default = next((i for i, e in enumerate(entries, 1) if e["quant"] == rec), None)
+    r = results[pick - 1]
+    repo, entries = r["repo"], r["entries"]
+    rec = r["best"]["quant"]
+    show_all = False
     while True:
-        pick = ask_number("Size number", len(entries), default)
+        shown = entries if show_all else usable(entries, VRAM)
+        print(f"\nSizes for {repo}:" + ("" if VRAM else "  (graphics memory unknown, so no fit check)"))
+        for i, e in enumerate(shown, 1):
+            if e["split"]:
+                note = "comes in pieces, not supported yet"
+            else:
+                note = fit_label(e["size"], VRAM) + ("  (recommended)" if e["quant"] == rec else "")
+            print(f"  {i:>2}) {e['quant']:<10} {human(e['size']):>8}  {note}")
+        extra = len(entries) - len(shown)
+        count = len(shown)
+        if extra:
+            count += 1
+            print(f"  {count:>2}) Show {extra} more sizes that are too big for your graphics card")
+        default = next((i for i, e in enumerate(shown, 1) if e["quant"] == rec), None)
+        pick = ask_number("Size number", count, default)
         if pick is None:
             return
-        e = entries[pick - 1]
-        if not e["split"]:
-            break
-        print("  That size comes in pieces, which isn't supported yet. Pick another.")
+        if extra and pick == count:
+            show_all = True
+            continue
+        e = shown[pick - 1]
+        if e["split"]:
+            print("  That size comes in pieces, which isn't supported yet. Pick another.")
+            continue
+        break
     download_model(ollama_name(repo, e["quant"]), e["size"], hf=(repo, e["files"]))
 
 

@@ -21,7 +21,7 @@ Switching models is just closing the window and starting again with a different 
 A companion app for Ollama chores, so you never need to type Ollama commands. Double-click `ModelManager.bat`, or run `install-command.bat models ModelManager.bat` once and then type `models` in any terminal.
 
 - **My models**: size, whether George can use it, memory size, whether it fits your graphics card, and whether it's loaded now. George's `-64k` versions are listed under the model they came from.
-- **Search Hugging Face and download**: type a few words, pick a model, then pick a size. Each size is labelled *fits*, *tight* or *too big, will be slow* for your graphics card, and the best fit is marked. If Ollama can't download it, the app offers to download the file directly and import it.
+- **Search Hugging Face and download**: type a few words, pick a model, then pick a size. Models with no size your graphics card can run are hidden, and each result shows its best fit. Sizes are labelled *fits* or *tight*; sizes that are too big are tucked behind a "show more" choice. If Ollama can't download it, the app offers to download the file directly and import it.
 - **Download by name**: paste a name from [ollama.com/search?c=tools](https://ollama.com/search?c=tools), or an `hf.co/...` link.
 - **Import a .gguf file**: picks from your LM Studio and Downloads folders, or paste a path.
 - After every download or import it checks whether George can use the model. If not, it copies the chat format from an installed model of the same kind that can.

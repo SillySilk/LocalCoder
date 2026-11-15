@@ -64,3 +64,12 @@ def test_download_resumes(tmp_path):
 def test_gated_repo_needs_login(tmp_path):
     with pytest.raises(HFError, match="needs a Hugging Face login"):
         download_file("meta-llama/Llama-3.1-8B-Instruct", "config.json", tmp_path, lambda d, t: None)
+
+
+def test_helper_files_are_not_sizes():
+    sizes = quants("ggml-org/Qwen3.8-27B-GGUF")
+    assert min(e["size"] for e in sizes) > 10 * 10**9  # mtp-/dflash-/mmproj- helpers left out
+
+
+def test_search_has_dates():
+    assert all(r["updated"] for r in search("SmolLM2-135M-Instruct", limit=3))
