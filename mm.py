@@ -18,7 +18,7 @@ from mm_hf import HFError, download_file, ollama_name, quants, search
 from mm_import import (clean_path, find_ggufs, fix_tools, import_gguf, missing_family_hint,
                        suggest_name)
 from mm_settings import (MEMORY_CHOICES, STAY_CHOICES, SettingsError, apply, change_models_folder,
-                         check_folder, folder_size, read)
+                         check_folder, folder_size, read, same_volume)
 from mm_store import delete_plan, models_dir
 
 TOOLS_PAGE = "https://ollama.com/search?c=tools"
@@ -37,7 +37,7 @@ def ask_number(prompt, count, default, zero="back"):
     """A number from 1 to count. 0 means go back (None). Blank takes the default."""
     while True:
         text = ask(f"{prompt} (0 = {zero})", None if default is None else str(default))
-        if text.isdigit() and 0 <= int(text) <= count:
+        if text.isascii() and text.isdecimal() and 0 <= int(text) <= count:
             return int(text) or None
         print(f"  Please type a number from 0 to {count}.")
 
@@ -110,22 +110,41 @@ def enough_space(size):
     return True
 
 
-def download_model(name, size=None, hf=None):
+def enough_for_direct(size):
+    """The direct download needs room in Downloads, then again in the models folder."""
+    downloads, models = Path.home() / "Downloads", models_dir()
+    same = same_volume(downloads, models)
+    need = {downloads: size * 2} if same else {downloads: size, models: size}
+    for folder, amount in need.items():
+        free = free_space(folder)
+        if size and free < amount:
+            print(f"Not enough disk space: {folder} needs {human(amount)} and {human(free)} is free.")
+            return False
+    return True
+
+
+def download_model(name, size=None, hf=None, direct=False):
     """hf: (repo, files) for a Hugging Face model, so a failed pull can fall back
     to downloading the file directly, if the user agrees."""
     if not enough_space(size):
         return
     existed = have(name)
-    print(f"\nDownloading {name}")
-    try:
-        pull(name, lambda status, d, t: progress(status[:20] or "Downloading", d, t))
-        done_line()
-    except OllamaError as e:
-        done_line()
-        print(f"Ollama couldn't download it: {e}")
-        if not hf or not ask_yes("Download the file directly instead, then import it?"):
-            return
+    pulled = False
+    if not direct:
+        print(f"\nDownloading {name}")
+        try:
+            pull(name, lambda status, d, t: progress(status[:20] or "Downloading", d, t))
+            done_line()
+            pulled = True
+        except OllamaError as e:
+            done_line()
+            print(f"Ollama couldn't download it: {e}")
+            if not hf or not ask_yes("Download the file directly instead, then import it?"):
+                return
+    if not pulled:
         repo, files = hf
+        if not enough_for_direct(size):
+            return
         path = download_file(repo, files[0], Path.home() / "Downloads",
                              lambda d, t: progress("Downloading", d, t))
         done_line()
@@ -263,7 +282,7 @@ def search_screen():
             print("  That size comes in pieces, which isn't supported yet. Pick another.")
             continue
         break
-    download_model(ollama_name(repo, e["quant"]), e["size"], hf=(repo, e["files"]))
+    download_model(ollama_name(repo, e["quant"]), e["size"], hf=(repo, e["files"]), direct=e.get("direct", False))
 
 
 def by_name_screen():
@@ -320,8 +339,9 @@ def delete_screen():
     plan = delete_plan(names)
     print("\nThis deletes: " + ", ".join(short(n) for n in names))
     print(f"Disk space you get back: {human(plan['freed'])}")
-    if plan["shared_with"]:
-        print("These share files with: " + ", ".join(short(n) for n in plan["shared_with"]) +
+    if plan["shared_with"] and plan["shared_bytes"] >= 100 * 10**6:
+        print(f"These share {human(plan['shared_bytes'])} with: " +
+              ", ".join(short(n) for n in plan["shared_with"]) +
               ". That space only comes back when those are deleted too.")
     if ask_yes("Delete?"):
         for n in names:
@@ -342,9 +362,13 @@ def unload_screen():
     if pick is None:
         return
     chosen = models if pick == len(models) + 1 else [models[pick - 1]]
+    failed = []
     for m in chosen:
-        unload(m["name"])
-    print("Unloaded.")
+        try:
+            unload(m["name"])
+        except OllamaError as e:
+            failed.append(f"{short(m['name'])} ({e})")
+    print("Unloaded." if not failed else "Unloaded the rest. Couldn't unload: " + ", ".join(failed))
 
 
 def show_memory(v):
@@ -451,8 +475,12 @@ def main():
     for stream in (sys.stdout, sys.stderr):
         if hasattr(stream, "reconfigure"):
             stream.reconfigure(errors="replace")  # never crash on a character the window can't show
-    start_ollama()
-    VRAM = graphics_memory()
+    try:
+        start_ollama()
+        VRAM = graphics_memory()
+    except (KeyboardInterrupt, EOFError):
+        print()
+        return
     while True:
         try:
             try:

@@ -21,6 +21,7 @@ from pathlib import Path
 
 from lc_ollama import ollama_up
 from mm_fit import free_space, human
+import mm_store
 from mm_store import APP_DB, app_setting, user_env
 
 try:
@@ -48,7 +49,7 @@ class SettingsError(Exception):
 def read():
     ctx = app_setting("context_length")
     return {
-        "models_folder": app_setting("models") or user_env("OLLAMA_MODELS") or str(DEFAULT_MODELS),
+        "models_folder": mm_store.models_folder(),
         "memory": str(ctx) if ctx else user_env("OLLAMA_CONTEXT_LENGTH"),
         "stay_loaded": user_env("OLLAMA_KEEP_ALIVE"),
     }
@@ -109,12 +110,12 @@ def start_ollama_fresh():
         raise SettingsError(f"The Ollama app was not found at {APP_EXE}.")
     env = dict(os.environ)
     for name in KEYS.values():
-        value = user_env(name)
+        value = user_env(name) or mm_store.system_env(name)
         if value is None:
             env.pop(name, None)
         else:
             env[name] = value
-    subprocess.Popen([str(APP_EXE)], env=env, cwd=str(Path.home()))  # see lc_ollama.start_ollama
+    subprocess.Popen([str(APP_EXE), "--hide"], env=env, cwd=str(Path.home()))  # see lc_ollama.start_ollama
     for _ in range(60):
         if ollama_up():
             return
@@ -201,6 +202,23 @@ def check_folder(folder):
     return folder
 
 
+def _existing(folder):
+    folder = Path(folder)
+    while not folder.exists() and folder != folder.parent:
+        folder = folder.parent
+    return folder
+
+
+def same_volume(a, b):
+    """True when both folders are on the same disk. Compares the disks
+    themselves, not drive letters, so a folder that is really a link to
+    another drive (a junction or mounted folder) counts as that drive."""
+    try:
+        return os.stat(_existing(a)).st_dev == os.stat(_existing(b)).st_dev
+    except OSError:
+        return False
+
+
 def _inside(child, parent):
     child, parent = Path(child).resolve(), Path(parent).resolve()
     return child == parent or parent in child.parents
@@ -237,7 +255,7 @@ def move_models(src, dst, on_progress):
              for p in (src / part).rglob("*") if p.is_file()]
     total = sum(p.stat().st_size for p in files)
     free = free_space(dst)
-    if free < total:
+    if not same_volume(src, dst) and free < total:  # same disk: files are only renamed
         raise SettingsError(f"There's not enough space in {dst}: it needs {human(total)}, "
                             f"and {human(free)} is free.")
     done = moved = 0

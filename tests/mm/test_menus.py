@@ -102,3 +102,46 @@ def test_hidden_count_only_counts_too_big(monkeypatch, capsys):
     mm.search_screen()
     out = capsys.readouterr().out
     assert "3 hidden" in out and "2 more" in out
+
+
+def test_ask_number_rejects_superscript(monkeypatch):
+    feed(monkeypatch, ["²", "1"])
+    assert mm.ask_number("Pick", 3, None) == 1
+
+
+def test_ctrl_c_during_startup(monkeypatch):
+    def stop():
+        raise KeyboardInterrupt
+    monkeypatch.setattr(mm, "start_ollama", stop)
+    mm.main()
+
+
+def test_fallback_checks_downloads_space(monkeypatch, capsys):
+    from lc_ollama import OllamaError
+    called = []
+
+    def fail(*a):
+        raise OllamaError("server busy")
+
+    monkeypatch.setattr(mm, "have", lambda n: False)
+    monkeypatch.setattr(mm, "pull", fail)
+    monkeypatch.setattr(mm, "free_space", lambda p: 0 if "Downloads" in str(p) else 10**12)
+    monkeypatch.setattr(mm, "download_file", lambda *a: called.append("download"))
+    monkeypatch.setattr(mm, "import_gguf", lambda *a: called.append("import"))
+    feed(monkeypatch, ["y"])
+    mm.download_model("hf.co/u/r:Q4", 5 * 10**9, hf=("u/r", ["r-Q4.gguf"]))
+    assert called == [] and "Not enough disk space" in capsys.readouterr().out
+
+
+def _delete_screen_output(monkeypatch, capsys, shared_bytes):
+    monkeypatch.setattr(mm, "installed", lambda: [{"name": "a:latest", "size": 10}])
+    monkeypatch.setattr(mm, "delete_plan", lambda names: {"freed": 10, "shared_with": ["b:latest"],
+                                                          "shared_bytes": shared_bytes})
+    feed(monkeypatch, ["1", "n"])
+    mm.delete_screen()
+    return capsys.readouterr().out
+
+
+def test_shared_note_only_when_it_matters(monkeypatch, capsys):
+    assert "share" not in _delete_screen_output(monkeypatch, capsys, 50_000)
+    assert "share 2.0 GB with" in _delete_screen_output(monkeypatch, capsys, 2 * 10**9)

@@ -37,3 +37,7 @@ def test_delete_plan_shared(tiny_model, copy_model):
 
 def test_latest_and_bare_match(copy_model):
     assert delete_plan([copy_model]) == delete_plan([copy_model + ":latest"])
+
+
+def test_shared_bytes(tiny_model, copy_model):
+    assert delete_plan([tiny_model])["shared_bytes"] >= 105_000_000

@@ -44,7 +44,7 @@ def start_ollama():
     # would stop that folder (e.g. a project) from being renamed or deleted.
     home = str(Path.home())
     if exe.exists():
-        subprocess.Popen([str(exe)], cwd=home)
+        subprocess.Popen([str(exe), "--hide"], cwd=home)  # --hide: tray only, no window
     else:
         subprocess.Popen(["ollama", "serve"], cwd=home, stdout=subprocess.DEVNULL,
                          stderr=subprocess.DEVNULL)
@@ -164,4 +164,8 @@ def running():
 
 
 def unload(name):
+    """Free the model's memory. A model that isn't installed or loaded is
+    already unloaded, so that's not an error."""
+    if canonical(name) not in {canonical(m["name"]) for m in running()}:
+        return
     call("/api/generate", {"model": name, "keep_alive": 0})

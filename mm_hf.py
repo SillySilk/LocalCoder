@@ -10,7 +10,7 @@ from pathlib import Path
 HF = "https://huggingface.co"
 UA = {"User-Agent": "LocalCoder-ModelManager"}
 
-QUANT = re.compile(r"(?<![A-Za-z0-9])(I?Q\d(?:_[A-Z0-9]+)*|F16|BF16|F32)(?=[-.])", re.I)
+QUANT = re.compile(r"(?<![A-Za-z0-9])((?:UD-)?I?Q\d(?:_[A-Z0-9]+)*|F16|BF16|F32)(?=[-.])", re.I)
 HELPERS = ("mtp-", "dflash-", "draft-")
 SPLIT = re.compile(r"-\d{5}-of-\d{5}\.gguf$", re.I)
 
@@ -20,7 +20,12 @@ class HFError(Exception):
 
 
 def _open(url, headers=None, timeout=30):
-    req = urllib.request.Request(url, headers={**UA, **(headers or {})})
+    if isinstance(url, urllib.request.Request):
+        req = url
+        for k, v in {**UA, **(headers or {})}.items():
+            req.add_header(k, v)
+    else:
+        req = urllib.request.Request(url, headers={**UA, **(headers or {})})
     try:
         return urllib.request.urlopen(req, timeout=timeout)
     except urllib.error.HTTPError as e:
@@ -74,7 +79,17 @@ def quants(repo):
         g = groups.setdefault(key, {"quant": q, "files": [], "size": 0, "split": split})
         g["files"].append(path)
         g["size"] += (f.get("lfs") or {}).get("size") or f.get("size", 0)
-    return sorted(groups.values(), key=lambda g: g["size"])
+    out = sorted(groups.values(), key=lambda g: g["size"])
+    # Two different files with the same size name: Ollama can't tell which one
+    # a name means, so label them by file and download those directly.
+    counts = {}
+    for g in out:
+        counts[g["quant"]] = counts.get(g["quant"], 0) + 1
+    for g in out:
+        if counts[g["quant"]] > 1:
+            g["quant"] = f"{g['quant']} ({Path(g['files'][0]).stem})"
+            g["direct"] = True
+    return out
 
 
 def ollama_name(repo, quant):
@@ -88,8 +103,17 @@ def download_file(repo, path, dest_dir, on_progress):
     dest_dir.mkdir(parents=True, exist_ok=True)
     final = dest_dir / Path(path).name
     part = final.with_name(final.name + ".part")
-    have = part.stat().st_size if part.exists() else 0
     url = f"{HF}/{repo}/resolve/main/{urllib.parse.quote(path)}"
+    have = part.stat().st_size if part.exists() else 0
+    if have:
+        with _open(urllib.request.Request(url, method="HEAD")) as r:
+            size = int(r.headers.get("Content-Length", 0))
+        if have == size:  # already complete: just finish it
+            part.replace(final)
+            return final
+        if have > size:  # not this file; start over
+            part.unlink()
+            have = 0
     headers = {"Range": f"bytes={have}-"} if have else {}
     with _open(url, headers, timeout=60) as r:
         if have and r.status != 206:

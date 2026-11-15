@@ -16,7 +16,7 @@ set "BIN=%USERPROFILE%\.local\bin"
 if not exist "%BIN%\" mkdir "%BIN%"
 (
     echo @echo off
-    echo REM Opens %TARGET% from LocalCoder in the current folder.
+    echo REM Opens %TARGET% in %~dp0
     echo call "%~dp0%TARGET%" %%*
 ) > "%BIN%\%NAME%.cmd"
 echo Created "%BIN%\%NAME%.cmd"
