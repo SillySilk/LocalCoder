@@ -138,9 +138,14 @@ def download_model(name, size=None, hf=None, direct=False):
             pulled = True
         except OllamaError as e:
             done_line()
-            print(f"Ollama couldn't download it: {e}")
-            if not hf or not ask_yes("Download the file directly instead, then import it?"):
-                return
+            if hf and "not a valid quantization scheme" in str(e):
+                # Some uploads use size names Ollama can't ask for (e.g. "Q4_K").
+                # Nothing is wrong with the file, so no need to ask.
+                print("Ollama can't ask for this size by its name, so downloading the file directly instead.")
+            else:
+                print(f"Ollama couldn't download it: {e}")
+                if not hf or not ask_yes("Download the file directly instead, then import it?"):
+                    return
     if not pulled:
         repo, files = hf
         if not enough_for_direct(size):

@@ -1,5 +1,6 @@
 import os
 import subprocess
+from pathlib import Path
 import sys
 
 import mm
@@ -145,3 +146,32 @@ def _delete_screen_output(monkeypatch, capsys, shared_bytes):
 def test_shared_note_only_when_it_matters(monkeypatch, capsys):
     assert "share" not in _delete_screen_output(monkeypatch, capsys, 50_000)
     assert "share 2.0 GB with" in _delete_screen_output(monkeypatch, capsys, 2 * 10**9)
+
+
+def test_nonstandard_size_name_is_refused_by_ollama():
+    """Real check of the message the automatic switch relies on."""
+    import pytest as _pt
+    from lc_ollama import OllamaError, pull
+    with _pt.raises(OllamaError, match="not a valid quantization scheme"):
+        pull("hf.co/bartowski/SmolLM2-135M-Instruct-GGUF:Q4_K", lambda *a: None)
+
+
+def test_nonstandard_size_name_goes_straight_to_direct(monkeypatch, capsys):
+    from lc_ollama import OllamaError
+    got = []
+
+    def refuse(*a):
+        raise OllamaError('pull model manifest: 400: {"error":"The specified tag is not a valid '
+                          'quantization scheme. Please use another tag or \\"latest\\""}')
+
+    monkeypatch.setattr(mm, "have", lambda n: False)
+    monkeypatch.setattr(mm, "pull", refuse)
+    monkeypatch.setattr(mm, "free_space", lambda p: 10**12)
+    monkeypatch.setattr(mm, "download_file", lambda *a: got.append("download") or Path("C:/x/m-Q4_K.gguf"))
+    monkeypatch.setattr(mm, "free_name", lambda n: n)
+    monkeypatch.setattr(mm, "import_gguf", lambda *a: got.append("import") or "m-q4_k:latest")
+    monkeypatch.setattr(mm, "tool_check", lambda *a: got.append("check"))
+    feed(monkeypatch, [])  # no questions: switching to the direct download is automatic here
+    mm.download_model("hf.co/u/r:Q4_K", 5 * 10**9, hf=("u/r", ["m-Q4_K.gguf"]))
+    assert got == ["download", "import", "check"]
+    assert "downloading the file directly" in capsys.readouterr().out
