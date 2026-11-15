@@ -115,7 +115,7 @@ def start_ollama_fresh():
             env.pop(name, None)
         else:
             env[name] = value
-    subprocess.Popen([str(APP_EXE)], env=env, cwd=str(Path.home()))  # see lc_ollama.start_ollama
+    subprocess.Popen([str(APP_EXE), "--hide"], env=env, cwd=str(Path.home()))  # see lc_ollama.start_ollama
     for _ in range(60):
         if ollama_up():
             return

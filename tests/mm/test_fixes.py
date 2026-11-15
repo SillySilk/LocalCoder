@@ -125,11 +125,13 @@ def test_fix_tools_needs_same_tokenizer(monkeypatch):
 # Found while renaming the folder: Ollama started from a project folder keeps it locked
 def test_ollama_is_started_from_home(monkeypatch):
     import lc_ollama
-    seen = []
+    seen, hidden = [], []
 
     class FakePopen:
         def __init__(self, args, **kw):
             seen.append(kw.get("cwd"))
+            if "ollama app" in str(args[0]):
+                hidden.append("--hide" in args)
 
     ups = iter([False, True])
     monkeypatch.setattr(lc_ollama, "ollama_up", lambda: next(ups))
@@ -140,6 +142,7 @@ def test_ollama_is_started_from_home(monkeypatch):
     monkeypatch.setattr(mm_settings.subprocess, "Popen", FakePopen)
     mm_settings.start_ollama_fresh()
     assert seen == [str(Path.home()), str(Path.home())]
+    assert hidden and all(hidden)  # tray only, no window popping up
 
 
 # Polish Task 5
