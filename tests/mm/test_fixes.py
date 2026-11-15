@@ -120,3 +120,23 @@ def test_fix_tools_needs_same_tokenizer(monkeypatch):
     monkeypatch.setattr(mm_import, "call", lambda path, body=None, **k: created.append(body) or {})
     assert mm_import.fix_tools("bad:latest") is None
     assert created == []
+
+
+# Found while renaming the folder: Ollama started from a project folder keeps it locked
+def test_ollama_is_started_from_home(monkeypatch):
+    import lc_ollama
+    seen = []
+
+    class FakePopen:
+        def __init__(self, args, **kw):
+            seen.append(kw.get("cwd"))
+
+    ups = iter([False, True])
+    monkeypatch.setattr(lc_ollama, "ollama_up", lambda: next(ups))
+    monkeypatch.setattr(lc_ollama.subprocess, "Popen", FakePopen)
+    lc_ollama.start_ollama()
+    ups2 = iter([True])
+    monkeypatch.setattr(mm_settings, "ollama_up", lambda: next(ups2))
+    monkeypatch.setattr(mm_settings.subprocess, "Popen", FakePopen)
+    mm_settings.start_ollama_fresh()
+    assert seen == [str(Path.home()), str(Path.home())]

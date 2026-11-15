@@ -40,10 +40,14 @@ def start_ollama():
         return
     exe = Path(os.environ.get("LOCALAPPDATA", "")) / "Programs" / "Ollama" / "ollama app.exe"
     print("Starting Ollama...")
+    # Start it from the home folder: Ollama keeps its starting folder open, which
+    # would stop that folder (e.g. a project) from being renamed or deleted.
+    home = str(Path.home())
     if exe.exists():
-        os.startfile(str(exe))  # noqa: S606 - Windows only, launches the Ollama tray app
+        subprocess.Popen([str(exe)], cwd=home)
     else:
-        subprocess.Popen(["ollama", "serve"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.Popen(["ollama", "serve"], cwd=home, stdout=subprocess.DEVNULL,
+                         stderr=subprocess.DEVNULL)
     for _ in range(30):
         if ollama_up():
             return
