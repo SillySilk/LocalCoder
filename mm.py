@@ -8,18 +8,21 @@ import re
 import sys
 from pathlib import Path
 
-from lc_ollama import (OllamaError, call, canonical, delete, installed, model_facts, pull,
-                       running, start_ollama, unload)
+import traceback
+
+from lc_ollama import (OllamaError, call, canonical, delete, facts, installed, pull, running,
+                       start_ollama, unload)
 from mm_fit import fit_label, free_space, graphics_memory, human, recommended
 from mm_hf import HFError, download_file, ollama_name, quants, search
 from mm_import import (clean_path, find_ggufs, fix_tools, import_gguf, missing_family_hint,
                        suggest_name)
-from mm_settings import (MEMORY_CHOICES, STAY_CHOICES, SettingsError, apply, folder_size,
-                         move_models, read, stop_ollama)
+from mm_settings import (MEMORY_CHOICES, STAY_CHOICES, SettingsError, apply, change_models_folder,
+                         check_folder, folder_size, read)
 from mm_store import delete_plan, models_dir
 
 TOOLS_PAGE = "https://ollama.com/search?c=tools"
 VRAM = None  # graphics memory in bytes, measured at start
+ERROR_LOG = Path(__file__).resolve().parent / "tests" / "logs" / "model-manager-errors.log"
 
 
 # ---------- asking ----------
@@ -78,7 +81,11 @@ def short(n):
     return n[:-len(":latest")] if n.endswith(":latest") else n
 
 
-def tool_check(name):
+def have(name):
+    return canonical(name) in {canonical(m["name"]) for m in installed()}
+
+
+def tool_check(name, existed_before):
     print("\nChecking whether George can use it...")
     result = fix_tools(name)
     if result == name:
@@ -86,8 +93,9 @@ def tool_check(name):
     elif result:
         print(f"Fixed it using {short(result)}'s chat format. George can use it now.")
     else:
-        print(missing_family_hint(name))
-        if not ask_yes("Keep it for chat only?"):
+        print("George can't use this one as an agent (it can still chat). " + missing_family_hint(name))
+        # Never offer to delete a model the user already had before this download.
+        if not existed_before and ask_yes("Delete it again?"):
             delete(name)
             print("Deleted.")
 
@@ -106,6 +114,7 @@ def download_model(name, size=None, hf=None):
     to downloading the file directly, if the user agrees."""
     if not enough_space(size):
         return
+    existed = have(name)
     print(f"\nDownloading {name}")
     try:
         pull(name, lambda status, d, t: progress(status[:20] or "Downloading", d, t))
@@ -119,10 +128,12 @@ def download_model(name, size=None, hf=None):
         path = download_file(repo, files[0], Path.home() / "Downloads",
                              lambda d, t: progress("Downloading", d, t))
         done_line()
-        name = import_gguf(path, suggest_name(path), lambda s, d, t: progress(s, d, t))
+        name = free_name(suggest_name(path))
+        existed = have(name)
+        name = import_gguf(path, name, lambda s, d, t: progress(s, d, t))
         done_line()
         print(f"Imported as {short(name)}. The file is still in {path.parent}; you can delete it.")
-    tool_check(name)
+    tool_check(name, existed)
 
 
 # ---------- screens ----------
@@ -160,7 +171,7 @@ def my_models():
     loaded = {m["name"] for m in running()}
     print(f"\n{'Model':<44} {'Size':>8}  {'George?':<8} {'Memory':<8} {'Fit':<22} Loaded")
     for m, child in ordered_models(models):
-        f = model_facts(m["name"])
+        f = facts(m["name"])
         name = ("   - " if child else "") + short(m["name"])
         mem = f"{f['num_ctx'] // 1024}k" if f["num_ctx"] else "default"
         print(f"{name:<44} {human(m['size']):>8}  {'yes' if f['tools'] else 'NO':<8} {mem:<8} "
@@ -232,13 +243,14 @@ def import_screen():
         if not path.is_file():
             print(f"No file at {path}")
             return
-    name = ask("Name for it in Ollama", suggest_name(path)).lower().replace(" ", "-")
+    name = free_name(ask("Name for it in Ollama", suggest_name(path)).lower().replace(" ", "-"))
     if not enough_space(path.stat().st_size):
         return
+    existed = have(name)
     full = import_gguf(path, name, lambda s, d, t: progress(s, d, t))
     done_line()
     print(f"Imported as {short(full)}.")
-    tool_check(full)
+    tool_check(full, existed)
 
 
 def delete_screen():
@@ -316,22 +328,23 @@ def settings_screen():
         return
     print("Changing this restarts Ollama; anything running in George will stop.")
     if pick == 1:
-        dst = clean_path(ask("New folder for models"))
-        if not str(dst) or str(dst) == ".":
+        text = ask("New folder for models (full path, e.g. D:\\Ollama models)")
+        if not text:
             return
+        dst = check_folder(clean_path(text))
         src = Path(s["models_folder"])
         if dst.resolve() == src.resolve():
             print("That's already where they are.")
             return
         size = folder_size(src) if src.is_dir() else 0
-        if size and ask_yes(f"Move your existing models there first? ({human(size)})"):
-            stop_ollama()
-            move_models(src, dst, lambda d, t: progress("Moving", d, t))
-            done_line()
-        elif size:
+        move = bool(size) and ask_yes(f"Move your existing models there first? ({human(size)})")
+        if size and not move:
             print("Your existing models stay where they are and won't show until you switch back.")
-        dst.mkdir(parents=True, exist_ok=True)
-        apply_and_report("models_folder", str(dst))
+        print("Restarting Ollama...")
+        ok = change_models_folder(src, dst, move, lambda d, t: progress("Moving", d, t))
+        done_line()
+        print("Done. Ollama is using the new folder." if ok else
+              "Ollama restarted but didn't pick up the change. Check the Ollama app's own Settings screen.")
     elif pick == 2:
         choices = MEMORY_CHOICES + [("Ollama's default", None)]
         for i, (label, _) in enumerate(choices, 1):
@@ -361,6 +374,24 @@ MENU = """  1) My models
   0) Quit"""
 
 
+def free_name(name):
+    """Ask before an import replaces a model that already has this name."""
+    while have(name):
+        if ask_yes(f"A model called {name} already exists. Replace it?"):
+            return name
+        name = ask("Another name").lower().replace(" ", "-") or name
+    return name
+
+
+def log_error():
+    try:
+        ERROR_LOG.parent.mkdir(parents=True, exist_ok=True)
+        with open(ERROR_LOG, "a", encoding="utf-8") as f:
+            f.write(traceback.format_exc() + "\n")
+    except OSError:
+        pass
+
+
 def header():
     version = call("/api/version").get("version", "?")
     count = len(installed())
@@ -377,7 +408,11 @@ def main():
     VRAM = graphics_memory()
     while True:
         try:
-            print("\n" + header())
+            try:
+                top = header()
+            except OllamaError as e:
+                top = f"===== Model Manager =====  (Ollama problem: {e})"
+            print("\n" + top)
             print(MENU)
             pick = ask_number("Choose", 7, None, zero="quit")
         except (KeyboardInterrupt, EOFError):
@@ -393,6 +428,10 @@ def main():
         except (OllamaError, HFError, SettingsError) as e:
             done_line()
             print(f"Problem: {e}")
+        except Exception as e:  # anything unexpected: plain words, details to a log file
+            done_line()
+            log_error()
+            print(f"Something went wrong: {e}. Details were saved to {ERROR_LOG}.")
 
 
 if __name__ == "__main__":

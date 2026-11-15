@@ -1,6 +1,7 @@
 """Talking to Ollama's local API. Shared by George (lc_launch.py) and
 Model Manager (mm.py)."""
 
+import http.client
 import json
 import os
 import subprocess
@@ -81,7 +82,15 @@ def call(path, body=None, method=None, timeout=30):
 
 def model_facts(name):
     """What LocalCoder needs to know about one installed model."""
-    d = api("/api/show", {"model": name})
+    return _facts(name, api("/api/show", {"model": name}))
+
+
+def facts(name):
+    """model_facts, but restarts Ollama if needed and raises OllamaError."""
+    return _facts(name, call("/api/show", {"model": name}))
+
+
+def _facts(name, d):
     caps = d.get("capabilities") or []
     num_ctx = None
     for line in (d.get("parameters") or "").splitlines():
@@ -104,6 +113,7 @@ def model_facts(name):
         "size": det.get("parameter_size", ""),
         "family": det.get("family", ""),
         "arch": arch,
+        "tokenizer": info.get("tokenizer.ggml.pre", ""),
     }
 
 
@@ -123,7 +133,8 @@ def pull(name, on_progress):
                                  data=json.dumps({"model": name, "stream": True}).encode(),
                                  headers={"Content-Type": "application/json"})
     try:
-        with urllib.request.urlopen(req, timeout=60) as resp:
+        # Ollama can go quiet for minutes while it checks a big download.
+        with urllib.request.urlopen(req, timeout=900) as resp:
             for line in resp:
                 if not line.strip():
                     continue
@@ -135,6 +146,9 @@ def pull(name, on_progress):
         raise OllamaError(_http_message(e)) from None
     except urllib.error.URLError as e:
         raise OllamaError(f"Could not reach Ollama: {e.reason}") from None
+    except (OSError, http.client.HTTPException) as e:
+        raise OllamaError(f"The download stopped ({e.__class__.__name__}). "
+                          "Try again; it carries on where it left off.") from None
 
 
 def delete(name):

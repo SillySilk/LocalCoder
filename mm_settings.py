@@ -191,10 +191,48 @@ def folder_size(folder):
 MODEL_PARTS = ("blobs", "manifests", "manifests-v2")
 
 
+def check_folder(folder):
+    """A usable folder for models: a full path on a drive that exists."""
+    folder = Path(folder)
+    if not folder.is_absolute():
+        raise SettingsError(f"Please type a full path, starting with a drive letter (e.g. D:\Ollama models), not {folder}.")
+    if not Path(folder.anchor).exists():
+        raise SettingsError(f"There's no drive {folder.drive} on this PC.")
+    return folder
+
+
+def _inside(child, parent):
+    child, parent = Path(child).resolve(), Path(parent).resolve()
+    return child == parent or parent in child.parents
+
+
+def change_models_folder(src, dst, move, on_progress):
+    """Check everything first, then (optionally) move the models and switch
+    Ollama to dst. Returns True if Ollama is using dst."""
+    dst = check_folder(dst)
+    if move and _inside(dst, src):
+        raise SettingsError("The new folder can't be inside the current models folder.")
+    if not APP_DB.exists():
+        raise SettingsError("The Ollama app's settings file was not found, so the folder can't be changed. "
+                            "Open the Ollama app once, then try again.")
+    if not APP_EXE.exists():
+        raise SettingsError(f"The Ollama app was not found at {APP_EXE}.")
+    if move:
+        stop_ollama()
+        try:
+            move_models(src, dst, on_progress)
+        finally:
+            start_ollama_fresh()  # back on the old folder if the move failed
+    dst.mkdir(parents=True, exist_ok=True)
+    return apply("models_folder", str(dst))
+
+
 def move_models(src, dst, on_progress):
     """Move Ollama's model files from src to dst. Ollama must be closed.
     on_progress(done_bytes, total_bytes)."""
     src, dst = Path(src), Path(dst)
+    if _inside(dst, src):
+        raise SettingsError("The new folder can't be inside the current models folder.")
     files = [p for part in MODEL_PARTS if (src / part).is_dir()
              for p in (src / part).rglob("*") if p.is_file()]
     total = sum(p.stat().st_size for p in files)
@@ -202,14 +240,21 @@ def move_models(src, dst, on_progress):
     if free < total:
         raise SettingsError(f"There's not enough space in {dst}: it needs {human(total)}, "
                             f"and {human(free)} is free.")
-    done = 0
-    for p in files:
-        target = dst / p.relative_to(src)
-        target.parent.mkdir(parents=True, exist_ok=True)
-        size = p.stat().st_size
-        shutil.move(str(p), str(target))
-        done += size
-        on_progress(done, total)
+    done = moved = 0
+    try:
+        for p in files:
+            target = dst / p.relative_to(src)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            size = p.stat().st_size
+            shutil.move(str(p), str(target))
+            moved += 1
+            done += size
+            on_progress(done, total)
+    except (KeyboardInterrupt, OSError) as e:
+        why = "you stopped it" if isinstance(e, KeyboardInterrupt) else str(e)
+        raise SettingsError(f"The move stopped partway ({why}): {moved} of {len(files)} files are now in "
+                            f"{dst}, the rest are still in {src}. Ollama is still using {src}. "
+                            "Run the same move again to finish it.") from None
     for part in MODEL_PARTS:
         if (src / part).is_dir():
             shutil.rmtree(src / part)

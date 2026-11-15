@@ -7,7 +7,7 @@ import urllib.request
 from pathlib import Path
 
 import lc_ollama
-from lc_ollama import OllamaError, call, canonical, installed, model_facts
+from lc_ollama import OllamaError, call, canonical, facts, installed
 
 # Probed on Ollama 0.40.16: /api/create accepts "renderer" and "parser" and
 # /api/show returns them (e.g. qwen3-coder models), so both are copied.
@@ -62,6 +62,8 @@ def _upload(path, digest, on_progress):
     except urllib.error.HTTPError as e:
         if e.code != 404:
             raise OllamaError(f"Ollama said {e.code} {e.reason}") from None
+    except urllib.error.URLError:
+        raise OllamaError("Could not reach Ollama. Open the Ollama app and try again.") from None
     size = Path(path).stat().st_size
     with open(path, "rb") as f:
         req = urllib.request.Request(url, data=_Reader(f, size, on_progress), method="POST",
@@ -88,8 +90,8 @@ def fix_tools(name):
     """Give `name` tool use by copying the chat format from an installed model
     of the same architecture that has it. Returns the donor's name, `name`
     itself if it already had tool use, or None if no donor exists."""
-    facts = model_facts(name)
-    if facts["tools"]:
+    mine = facts(name)
+    if mine["tools"]:
         return name
     me = canonical(name)
     for m in installed():
@@ -97,22 +99,25 @@ def fix_tools(name):
         if other == me:
             continue
         try:
-            f = model_facts(other)
-        except (OSError, ValueError):
+            f = facts(other)
+        except (OllamaError, OSError, ValueError):
             continue
-        if not (f["tools"] and f["arch"] == facts["arch"]):
+        # Same architecture is not enough (many families report "llama");
+        # the tokenizer must match too, or the copied format uses tokens the model lacks.
+        if not (f["tools"] and f["arch"] == mine["arch"] and mine["tokenizer"]
+                and f["tokenizer"] == mine["tokenizer"]):
             continue
         show = call("/api/show", {"model": other})
         body = {"model": name, "from": name, "stream": False}
         body.update({k: show[k] for k in COPY_KEYS if show.get(k)})
         call("/api/create", body, timeout=600)
-        if model_facts(name)["tools"]:
+        if facts(name)["tools"]:
             return other
     return None
 
 
 def missing_family_hint(name):
-    arch = model_facts(name)["arch"] or "unknown"
+    arch = facts(name)["arch"] or "unknown"
     return (f"No installed model of the same kind ({arch}) has tool use to copy from. "
             f"Download an official {arch} model with tool use from "
             "https://ollama.com/search?c=tools, then run the tool check again.")
