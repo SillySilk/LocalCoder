@@ -10,7 +10,7 @@ from pathlib import Path
 HF = "https://huggingface.co"
 UA = {"User-Agent": "LocalCoder-ModelManager"}
 
-QUANT = re.compile(r"(?<![A-Za-z0-9])(I?Q\d(?:_[A-Z0-9]+)*|F16|BF16|F32)(?=[-.])", re.I)
+QUANT = re.compile(r"(?<![A-Za-z0-9])((?:UD-)?I?Q\d(?:_[A-Z0-9]+)*|F16|BF16|F32)(?=[-.])", re.I)
 HELPERS = ("mtp-", "dflash-", "draft-")
 SPLIT = re.compile(r"-\d{5}-of-\d{5}\.gguf$", re.I)
 
@@ -79,7 +79,17 @@ def quants(repo):
         g = groups.setdefault(key, {"quant": q, "files": [], "size": 0, "split": split})
         g["files"].append(path)
         g["size"] += (f.get("lfs") or {}).get("size") or f.get("size", 0)
-    return sorted(groups.values(), key=lambda g: g["size"])
+    out = sorted(groups.values(), key=lambda g: g["size"])
+    # Two different files with the same size name: Ollama can't tell which one
+    # a name means, so label them by file and download those directly.
+    counts = {}
+    for g in out:
+        counts[g["quant"]] = counts.get(g["quant"], 0) + 1
+    for g in out:
+        if counts[g["quant"]] > 1:
+            g["quant"] = f"{g['quant']} ({Path(g['files'][0]).stem})"
+            g["direct"] = True
+    return out
 
 
 def ollama_name(repo, quant):

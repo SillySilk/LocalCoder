@@ -123,21 +123,25 @@ def enough_for_direct(size):
     return True
 
 
-def download_model(name, size=None, hf=None):
+def download_model(name, size=None, hf=None, direct=False):
     """hf: (repo, files) for a Hugging Face model, so a failed pull can fall back
     to downloading the file directly, if the user agrees."""
     if not enough_space(size):
         return
     existed = have(name)
-    print(f"\nDownloading {name}")
-    try:
-        pull(name, lambda status, d, t: progress(status[:20] or "Downloading", d, t))
-        done_line()
-    except OllamaError as e:
-        done_line()
-        print(f"Ollama couldn't download it: {e}")
-        if not hf or not ask_yes("Download the file directly instead, then import it?"):
-            return
+    pulled = False
+    if not direct:
+        print(f"\nDownloading {name}")
+        try:
+            pull(name, lambda status, d, t: progress(status[:20] or "Downloading", d, t))
+            done_line()
+            pulled = True
+        except OllamaError as e:
+            done_line()
+            print(f"Ollama couldn't download it: {e}")
+            if not hf or not ask_yes("Download the file directly instead, then import it?"):
+                return
+    if not pulled:
         repo, files = hf
         if not enough_for_direct(size):
             return
@@ -278,7 +282,7 @@ def search_screen():
             print("  That size comes in pieces, which isn't supported yet. Pick another.")
             continue
         break
-    download_model(ollama_name(repo, e["quant"]), e["size"], hf=(repo, e["files"]))
+    download_model(ollama_name(repo, e["quant"]), e["size"], hf=(repo, e["files"]), direct=e.get("direct", False))
 
 
 def by_name_screen():

@@ -89,3 +89,28 @@ def test_oversized_part_restarts(tmp_path):
         f.truncate(200 * 10**6)
     out = download_file(TINY_REPO, TINY_FILE, tmp_path, lambda d, t: None)
     assert out.stat().st_size == TINY_SIZE
+
+
+def test_quant_of_keeps_ud_prefix():
+    assert quant_of("Model-UD-Q4_K_XL.gguf") == "UD-Q4_K_XL"
+    assert quant_of("Qwen3-0.6B-UD-IQ1_S.gguf") == "UD-IQ1_S"
+
+
+def test_same_size_name_twice_gets_told_apart(monkeypatch):
+    import mm_hf
+    tree = [{"type": "file", "path": "A-Q4_K_M.gguf", "size": 5},
+            {"type": "file", "path": "A-imat-Q4_K_M.gguf", "size": 6}]
+    monkeypatch.setattr(mm_hf, "_json", lambda url: tree)
+    labels = [e["quant"] for e in quants("x/y")]
+    assert len(set(labels)) == 2
+    assert all(e.get("direct") for e in quants("x/y"))  # Ollama can't choose between them by name
+
+
+def test_ud_tag_pulls():
+    from lc_ollama import delete, installed, pull
+    name = "hf.co/unsloth/Qwen3-0.6B-GGUF:UD-IQ1_S"
+    pull(name, lambda *a: None)
+    try:
+        assert name in [m["name"] for m in installed()]
+    finally:
+        delete(name)
