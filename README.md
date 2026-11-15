@@ -9,7 +9,7 @@ Run **Claude Code (or OpenCode) on local open-source models** through [Ollama](h
 Regular `claude` is unaffected. The local settings only apply inside the LocalCoder window.
 
 ## Use it
-1. Double-click `LocalCoder.bat` (or drag a project folder onto it). After running `install-command.bat` once, you can also type `george` in any terminal to start in the folder you're in.
+1. Double-click `George.bat` (or drag a project folder onto it). After running `install-command.bat` once, you can also type `george` in any terminal to start in the folder you're in.
 2. Pick a model. LocalCoder asks Ollama what each model can do: models ready for agent work are listed first, and models that can't use tools are marked. If the model's memory (context) is too small, it offers to make a 64k version on the spot. That takes seconds and almost no disk space, because it reuses the same model files.
 3. Pick a tool: **1 = Claude Code** or **2 = OpenCode**.
 

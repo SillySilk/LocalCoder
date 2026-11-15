@@ -2,12 +2,12 @@
 setlocal
 REM Creates a terminal command that opens one of this folder's launchers.
 REM Usage: install-command.bat [name] [launcher]
-REM   install-command.bat                          -> george opens LocalCoder.bat
+REM   install-command.bat                          -> george opens George.bat
 REM   install-command.bat models ModelManager.bat  -> models opens Model Manager
 set "NAME=%~1"
 if "%NAME%"=="" set "NAME=george"
 set "TARGET=%~2"
-if "%TARGET%"=="" set "TARGET=LocalCoder.bat"
+if "%TARGET%"=="" set "TARGET=George.bat"
 if not exist "%~dp0%TARGET%" (
     echo No launcher called %TARGET% in %~dp0
     exit /b 1

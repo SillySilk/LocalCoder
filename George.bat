@@ -1,6 +1,6 @@
 @echo off
 setlocal EnableDelayedExpansion
-title LocalCoder - local models in Claude Code / OpenCode
+title George - local models in Claude Code / OpenCode
 
 REM ---- Project folder: argument (Send To / drag-drop / george), else ask ----
 set "WORKDIR=%~1"
