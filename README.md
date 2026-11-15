@@ -17,6 +17,20 @@ Regular `claude` is unaffected. The local settings only apply inside the LocalCo
 
 Switching models is just closing the window and starting again with a different pick.
 
+## Model Manager
+A companion app for Ollama chores, so you never need to type Ollama commands. Double-click `ModelManager.bat`, or run `install-command.bat models ModelManager.bat` once and then type `models` in any terminal.
+
+- **My models**: size, whether George can use it, memory size, whether it fits your graphics card, and whether it's loaded now. George's `-64k` versions are listed under the model they came from.
+- **Search Hugging Face and download**: type a few words, pick a model, then pick a size. Each size is labelled *fits*, *tight* or *too big, will be slow* for your graphics card, and the best fit is marked. If Ollama can't download it, the app offers to download the file directly and import it.
+- **Download by name**: paste a name from [ollama.com/search?c=tools](https://ollama.com/search?c=tools), or an `hf.co/...` link.
+- **Import a .gguf file**: picks from your LM Studio and Downloads folders, or paste a path.
+- After every download or import it checks whether George can use the model. If not, it copies the chat format from an installed model of the same kind that can.
+- **Delete** shows how much disk space comes back, and warns when other models share the same files.
+- **Unload** frees graphics memory.
+- **Settings**: where models are saved (offers to move them), default memory size, and how long models stay loaded. The app restarts Ollama and checks that the change took. The models folder and memory size are saved in the Ollama app's own settings, because those win over Windows settings.
+
+Tests: `python -m pytest tests/mm` (needs Ollama running and internet; downloads a 105 MB test model and deletes it afterwards; briefly restarts Ollama).
+
 ## Requirements
 - Windows, [Ollama](https://ollama.com) 0.40 or newer, Python 3, and Claude Code and/or OpenCode installed.
 - A model that supports **tool use** (`ollama show <model>` lists `tools` under Capabilities). Without it the model can't act as an agent.
