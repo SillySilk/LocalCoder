@@ -1,5 +1,6 @@
 """Tests for the final-review fixes."""
 
+import os
 from pathlib import Path
 
 import pytest
@@ -146,9 +147,10 @@ def test_ollama_is_started_from_home(monkeypatch):
 
 
 # Polish Task 5
-def test_same_drive():
-    assert mm_settings.same_drive(Path("c:/a"), Path("C:/b")) is True
-    assert mm_settings.same_drive(Path("C:/a"), Path("D:/b")) is False
+def test_same_volume_letter_case():
+    assert mm_settings.same_volume(Path("c:/Windows"), Path("C:/Users/new-folder")) is True
+    if Path("D:/").exists():
+        assert mm_settings.same_volume(Path("C:/Windows"), Path("D:/new-folder")) is False
 
 
 def test_same_drive_move_needs_no_space(tmp_path, monkeypatch):
@@ -181,3 +183,47 @@ def test_app_setting_odd_path(tmp_path, monkeypatch):
     shutil.copy(mm_store.APP_DB, odd / "db.sqlite")
     monkeypatch.setattr(mm_store, "APP_DB", odd / "db.sqlite")
     assert mm_store.app_setting("models") == real
+
+
+# Polish final review
+def test_throttle_shows_each_step():
+    from mm_import import Throttle
+    calls = []
+    t = Throttle(lambda step, d, tot: calls.append(step), every_bytes=1 << 20)
+    for step in ("Checking file", "Copying into Ollama"):
+        for i in range(1, 101):
+            t(step, i * (1 << 20) // 2, 50 * (1 << 20))
+    assert calls.count("Copying into Ollama") > 10
+
+
+@pytest.mark.skipif(not Path("D:/").exists(), reason="needs a second drive")
+def test_same_volume_sees_through_junctions(tmp_path):
+    import shutil
+    import subprocess
+    import uuid
+    target = Path("D:/") / f"mm-junction-test-{uuid.uuid4().hex[:8]}"
+    target.mkdir()
+    link = tmp_path / "link"
+    try:
+        subprocess.run(["cmd", "/c", "mklink", "/J", str(link), str(target)], check=True, capture_output=True)
+        assert mm_settings.same_volume(tmp_path, tmp_path / "new") is True
+        assert mm_settings.same_volume(link, tmp_path / "new") is False
+    finally:
+        if link.exists():
+            os.rmdir(link)
+        shutil.rmtree(target)
+
+
+def test_restart_keeps_all_users_setting(monkeypatch):
+    seen = {}
+
+    class FakePopen:
+        def __init__(self, args, env=None, **kw):
+            seen.update(env or {})
+
+    monkeypatch.setattr(mm_settings, "user_env", lambda k: None)
+    monkeypatch.setattr(mm_settings.mm_store, "system_env", lambda k: "D:\m" if k == "OLLAMA_MODELS" else None)
+    monkeypatch.setattr(mm_settings.subprocess, "Popen", FakePopen)
+    monkeypatch.setattr(mm_settings, "ollama_up", lambda: True)
+    mm_settings.start_ollama_fresh()
+    assert seen.get("OLLAMA_MODELS") == "D:\m"

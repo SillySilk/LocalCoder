@@ -48,9 +48,11 @@ class Throttle:
     so a big import doesn't spend minutes redrawing the progress line."""
 
     def __init__(self, on_progress, every_bytes=64 << 20):
-        self.cb, self.every, self.last = on_progress, every_bytes, None
+        self.cb, self.every, self.last, self.step = on_progress, every_bytes, None, None
 
     def __call__(self, step, done, total):
+        if step != self.step:  # a new step starts counting from zero again
+            self.step, self.last = step, None
         if self.last is None or done - self.last >= self.every or done >= total:
             self.last = done
             self.cb(step, done, total)

@@ -18,7 +18,7 @@ from mm_hf import HFError, download_file, ollama_name, quants, search
 from mm_import import (clean_path, find_ggufs, fix_tools, import_gguf, missing_family_hint,
                        suggest_name)
 from mm_settings import (MEMORY_CHOICES, STAY_CHOICES, SettingsError, apply, change_models_folder,
-                         check_folder, folder_size, read)
+                         check_folder, folder_size, read, same_volume)
 from mm_store import delete_plan, models_dir
 
 TOOLS_PAGE = "https://ollama.com/search?c=tools"
@@ -113,7 +113,7 @@ def enough_space(size):
 def enough_for_direct(size):
     """The direct download needs room in Downloads, then again in the models folder."""
     downloads, models = Path.home() / "Downloads", models_dir()
-    same = Path(downloads.anchor).resolve() == Path(models.anchor).resolve()
+    same = same_volume(downloads, models)
     need = {downloads: size * 2} if same else {downloads: size, models: size}
     for folder, amount in need.items():
         free = free_space(folder)
