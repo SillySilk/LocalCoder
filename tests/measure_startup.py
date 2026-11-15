@@ -3,7 +3,7 @@
 Usage:
     python tests/measure_startup.py <model> [--lean]
 
-Goes through the LocalCoder relay like LocalCoder.bat does. --lean also applies
+Goes through the LocalCoder relay like George.bat does. --lean also applies
 the trimmed plugin list (claude-settings.json).
 """
 

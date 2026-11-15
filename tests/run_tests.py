@@ -70,7 +70,7 @@ ROOT = HERE.parent
 
 
 def agent_cmd(tool, model, prompt, work):
-    """Go through lc_launch.py, exactly like LocalCoder.bat / george do."""
+    """Go through lc_launch.py, exactly like George.bat / george do."""
     base = [sys.executable, str(ROOT / "lc_launch.py"), str(work),
             "--model", model, "--tool", tool, "--yes", "--"]
     if tool == "claude":

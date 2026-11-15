@@ -9,13 +9,27 @@ Run **Claude Code (or OpenCode) on local open-source models** through [Ollama](h
 Regular `claude` is unaffected. The local settings only apply inside the LocalCoder window.
 
 ## Use it
-1. Double-click `LocalCoder.bat` (or drag a project folder onto it). After running `install-command.bat` once, you can also type `george` in any terminal to start in the folder you're in.
+1. Double-click `George.bat` (or drag a project folder onto it). After running `install-command.bat` once, you can also type `george` in any terminal to start in the folder you're in.
 2. Pick a model. LocalCoder asks Ollama what each model can do: models ready for agent work are listed first, and models that can't use tools are marked. If the model's memory (context) is too small, it offers to make a 64k version on the spot. That takes seconds and almost no disk space, because it reuses the same model files.
 3. Pick a tool: **1 = Claude Code** or **2 = OpenCode**.
 
 `lc_launch.py` does the work; the `.bat` just calls it. For scripts: `python lc_launch.py <folder> --model <name> --tool claude|opencode --yes [-- extra tool args]`.
 
 Switching models is just closing the window and starting again with a different pick.
+
+## Model Manager
+A companion app for Ollama chores, so you never need to type Ollama commands. Double-click `ModelManager.bat`, or run `install-command.bat models ModelManager.bat` once and then type `models` in any terminal.
+
+- **My models**: size, whether George can use it, memory size, whether it fits your graphics card, and whether it's loaded now. George's `-64k` versions are listed under the model they came from.
+- **Search Hugging Face and download**: type a few words, pick a model, then pick a size. Models with no size your graphics card can run are hidden, and each result shows its best fit. Sizes are labelled *fits* or *tight*; sizes that are too big are tucked behind a "show more" choice. If Ollama can't download it, the app offers to download the file directly and import it.
+- **Download by name**: paste a name from [ollama.com/search?c=tools](https://ollama.com/search?c=tools), or an `hf.co/...` link.
+- **Import a .gguf file**: picks from your LM Studio and Downloads folders, or paste a path.
+- After every download or import it checks whether George can use the model. If not, it copies the chat format from an installed model of the same kind that can.
+- **Delete** shows how much disk space comes back, and warns when other models share the same files.
+- **Unload** frees graphics memory.
+- **Settings**: where models are saved (offers to move them), default memory size, and how long models stay loaded. The app restarts Ollama and checks that the change took. The models folder and memory size are saved in the Ollama app's own settings, because those win over Windows settings.
+
+Tests: `python -m pytest tests/mm` (needs Ollama running and internet; downloads a 105 MB test model and deletes it afterwards; briefly restarts Ollama).
 
 ## Requirements
 - Windows, [Ollama](https://ollama.com) 0.40 or newer, Python 3, and Claude Code and/or OpenCode installed.

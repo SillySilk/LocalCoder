@@ -10,82 +10,22 @@ convention is needed: tool support and context size come from the model.
 """
 
 import argparse
-import json
 import os
 import subprocess
 import sys
 import time
 import urllib.error
-import urllib.request
 from pathlib import Path
 
+from lc_ollama import api, model_facts, start_ollama
+
 ROOT = Path(__file__).resolve().parent
-OLLAMA = os.environ.get("LC_OLLAMA_URL", "http://127.0.0.1:11434")
 RELAY_PORT = 11435
 MIN_CTX = 32768        # Claude Code needs ~23k just to start a task
 WANT_CTX = 65536       # comfortable default for agent work
 
 
 # ---------- Ollama helpers ----------
-
-def api(path, body=None, base=OLLAMA, timeout=30):
-    data = json.dumps(body).encode() if body is not None else None
-    req = urllib.request.Request(base + path, data=data,
-                                 headers={"Content-Type": "application/json"})
-    with urllib.request.urlopen(req, timeout=timeout) as r:
-        return json.loads(r.read() or b"{}")
-
-
-def ollama_up():
-    try:
-        api("/api/version", timeout=3)
-        return True
-    except OSError:
-        return False
-
-
-def start_ollama():
-    if ollama_up():
-        return
-    exe = Path(os.environ.get("LOCALAPPDATA", "")) / "Programs" / "Ollama" / "ollama app.exe"
-    print("Starting Ollama...")
-    if exe.exists():
-        os.startfile(str(exe))  # noqa: S606 - Windows only, launches the Ollama tray app
-    else:
-        subprocess.Popen(["ollama", "serve"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    for _ in range(30):
-        if ollama_up():
-            return
-        time.sleep(1)
-    sys.exit("Ollama did not start. Open the Ollama app and try again.")
-
-
-def model_facts(name):
-    """What LocalCoder needs to know about one installed model."""
-    d = api("/api/show", {"model": name})
-    caps = d.get("capabilities") or []
-    num_ctx = None
-    for line in (d.get("parameters") or "").splitlines():
-        parts = line.split()
-        if len(parts) >= 2 and parts[0] == "num_ctx":
-            num_ctx = int(parts[1])
-    info = d.get("model_info") or {}
-    arch = info.get("general.architecture", "")
-    max_ctx = info.get(f"{arch}.context_length")
-    det = d.get("details") or {}
-    return {
-        "name": name,
-        "tools": "tools" in caps,
-        "thinking": "thinking" in caps,
-        "vision": "vision" in caps,
-        "embedding_only": caps == ["embedding"],
-        "num_ctx": num_ctx,
-        "max_ctx": int(max_ctx) if max_ctx else None,
-        "quant": det.get("quantization_level", ""),
-        "size": det.get("parameter_size", ""),
-        "family": det.get("family", ""),
-    }
-
 
 def list_models():
     names = [m["name"] for m in api("/api/tags").get("models", [])]
