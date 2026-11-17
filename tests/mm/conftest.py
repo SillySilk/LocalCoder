@@ -21,3 +21,10 @@ def tiny_model():
     yield TINY
     if pulled:
         lc_ollama.delete(TINY)
+
+
+@pytest.fixture(autouse=True)
+def _keep_test_relays_out_of_the_real_log(tmp_path, monkeypatch):
+    """Relays started by tests write to a throwaway log, not logs/relay.log."""
+    if not __import__("os").environ.get("LC_RELAY_EVENTS"):
+        monkeypatch.setenv("LC_RELAY_EVENTS", str(tmp_path / "relay-test.log"))

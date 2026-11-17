@@ -61,3 +61,64 @@ def test_relay_answers_clearly_when_ollama_is_unreachable():
     status, body = _post_through_relay(11496, "http://127.0.0.1:11497")
     assert status == 503
     assert b"Ollama is not running" in body
+
+
+def _fake_ollama(port, status, body):
+    import threading
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    class H(BaseHTTPRequestHandler):
+        def log_message(self, *a):
+            pass
+
+        def do_POST(self):
+            self.rfile.read(int(self.headers.get("content-length") or 0))
+            self.send_response(status)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+    srv = ThreadingHTTPServer(("127.0.0.1", port), H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    return srv
+
+
+def _logged_request(tmp_path, status, body):
+    import os
+    import subprocess
+    import sys
+    import urllib.error
+    import urllib.request
+    log = tmp_path / "relay.log"
+    srv = _fake_ollama(11493, status, body)
+    proc = subprocess.Popen([sys.executable, str(lc_launch.ROOT / "lc_proxy.py"), "11494",
+                             "http://127.0.0.1:11493"], stderr=subprocess.DEVNULL,
+                            env={**os.environ, "LC_RELAY_EVENTS": str(log)})
+    try:
+        assert wait_for(lambda: lc_launch.relay_up(11494), 10)
+        req = urllib.request.Request(
+            "http://127.0.0.1:11494/v1/messages", method="POST",
+            data=b'{"model": "m1", "messages": [{"role": "user", "content": "hi"}]}')
+        try:
+            urllib.request.urlopen(req, timeout=30).read()
+        except urllib.error.HTTPError as e:
+            e.read()
+        assert wait_for(lambda: log.exists() and "done status" in log.read_text(), 10)
+        return log.read_text()
+    finally:
+        proc.kill()
+        srv.shutdown()
+
+
+def test_relay_log_records_each_request(tmp_path):
+    text = _logged_request(tmp_path, 200, b'{"ok": true}')
+    assert "relay started on port 11494" in text
+    assert "start POST /v1/messages model=m1 messages=1" in text
+    assert "first reply after" in text
+    assert "done status 200" in text
+
+
+def test_relay_log_records_ollama_errors(tmp_path):
+    text = _logged_request(tmp_path, 500, b'{"error": "model ran out of memory"}')
+    assert "done status 500" in text
+    assert "model ran out of memory" in text

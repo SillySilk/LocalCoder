@@ -15,6 +15,8 @@ import json
 import os
 import sys
 import threading
+import time
+from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlsplit
 
@@ -22,6 +24,34 @@ PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 11435
 UPSTREAM = urlsplit(sys.argv[2] if len(sys.argv) > 2 else "http://127.0.0.1:11434")
 DEBUG_LOG = os.environ.get("LC_RELAY_LOG")  # optional: record requests/responses here
 _start_lock = threading.Lock()
+
+# Always-on short log: one line per event, so a stall can be traced afterwards.
+EVENT_LOG = os.environ.get("LC_RELAY_EVENTS") or os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs", "relay.log")
+EVENT_LOG_MAX = 5 * 1024 * 1024
+_log_lock = threading.Lock()
+
+
+def log_event(text):
+    """Append one timestamped line to the relay log. Never breaks the relay."""
+    line = f"{datetime.now():%Y-%m-%d %H:%M:%S} {text}\n"
+    with _log_lock:
+        try:
+            os.makedirs(os.path.dirname(EVENT_LOG), exist_ok=True)
+            if os.path.exists(EVENT_LOG) and os.path.getsize(EVENT_LOG) > EVENT_LOG_MAX:
+                os.replace(EVENT_LOG, EVENT_LOG + ".1")
+            with open(EVENT_LOG, "a", encoding="utf-8") as f:
+                f.write(line)
+        except OSError:
+            pass
+
+
+def describe(body):
+    """Short summary of a /v1/messages request: model, message count, size."""
+    try:
+        d = json.loads(body)
+        return f"model={d.get('model')} messages={len(d.get('messages') or [])} bytes={len(body)}"
+    except (ValueError, TypeError, AttributeError):
+        return f"bytes={len(body or b'')}"
 
 
 def _open_upstream(method, path, body, headers):
@@ -92,6 +122,27 @@ class Relay(BaseHTTPRequestHandler):
     def _relay(self):
         n = int(self.headers.get("content-length") or 0)
         body = self.rfile.read(n) if n else None
+        track = self.path.startswith("/v1/messages")
+        rid = f"{threading.get_ident() % 100000:05d}"
+        t0 = time.monotonic()
+        if track:
+            log_event(f"[{rid}] start {self.command} {self.path} {describe(body)}")
+        try:
+            self._forward(body, track, rid, t0)
+        except (ConnectionResetError, ConnectionAbortedError, BrokenPipeError):
+            if track:
+                log_event(f"[{rid}] Claude Code closed the connection after {time.monotonic() - t0:.1f}s")
+            raise
+        except TimeoutError:
+            if track:
+                log_event(f"[{rid}] Ollama sent nothing for 30 min, gave up after {time.monotonic() - t0:.1f}s")
+            raise
+        except Exception as e:
+            if track:
+                log_event(f"[{rid}] relay error after {time.monotonic() - t0:.1f}s: {e!r}")
+            raise
+
+    def _forward(self, body, track, rid, t0):
         if body and self.path.startswith("/v1/messages"):
             try:
                 body = json.dumps(fold_system_messages(json.loads(body))).encode()
@@ -103,6 +154,8 @@ class Relay(BaseHTTPRequestHandler):
         try:
             conn, resp = _open_upstream(self.command, self.path, body, headers)
         except ConnectionRefusedError:
+            if track:
+                log_event(f"[{rid}] Ollama not running and could not be started")
             # A real reply instead of a dropped connection: Claude Code shows the
             # message and retries, rather than reporting a network failure.
             msg = json.dumps({"type": "error", "error": {
@@ -129,10 +182,18 @@ class Relay(BaseHTTPRequestHandler):
         debug = open(DEBUG_LOG, "ab") if DEBUG_LOG and self.path.startswith("/v1/messages") else None
         if debug:
             debug.write(b"\n===REQUEST " + (body or b"") + b"\n===RESPONSE\n")
+        first = None
+        err = b""
         while True:
             chunk = resp.read1(65536)
             if not chunk:
                 break
+            if first is None:
+                first = time.monotonic() - t0
+                if track:
+                    log_event(f"[{rid}] Ollama status {resp.status}, first reply after {first:.1f}s")
+            if track and resp.status >= 400 and len(err) < 500:
+                err += chunk
             if debug:
                 debug.write(chunk)
             self.wfile.write(b"%x\r\n%s\r\n" % (len(chunk), chunk))
@@ -142,9 +203,13 @@ class Relay(BaseHTTPRequestHandler):
         if debug:
             debug.close()
         conn.close()
+        if track:
+            extra = f" error: {err[:500].decode('utf-8', 'replace')}" if err else ""
+            log_event(f"[{rid}] done status {resp.status} in {time.monotonic() - t0:.1f}s{extra}")
 
     do_GET = do_POST = do_HEAD = do_DELETE = do_PUT = _relay
 
 
 if __name__ == "__main__":
+    log_event(f"relay started on port {PORT}")
     ThreadingHTTPServer(("127.0.0.1", PORT), Relay).serve_forever()
