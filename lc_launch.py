@@ -19,13 +19,14 @@ import time
 import urllib.error
 from pathlib import Path
 
-from lc_ollama import api, model_facts, start_ollama
+from lc_ollama import OllamaError, api, model_facts, start_ollama, unload
 
 ROOT = Path(__file__).resolve().parent
 RELAY_PORT = 11435
 MIN_CTX = 32768        # Claude Code needs ~23k just to start a task
 WANT_CTX = 65536       # comfortable default for agent work
 started_relays = []    # relay processes this launcher started
+SESSIONS = ROOT / "logs" / "sessions"   # one file per open George window: the model it uses
 
 
 # ---------- Ollama helpers ----------
@@ -77,6 +78,71 @@ def make_variant(f, ctx):
     if made["tools"] != f["tools"]:
         sys.exit(f"{new} lost tool support when copied; please report this.")
     return made
+
+
+# ---------- keeping the model loaded ----------
+# Ollama is set to keep models loaded until told otherwise (Model Manager:
+# stay loaded = forever), so a pause never forces a slow reload and re-read.
+# George frees the model when it closes, unless another George window is
+# still using it.
+
+def _alive(pid):
+    out = subprocess.run(["tasklist", "/FI", f"PID eq {pid}", "/NH"],
+                         capture_output=True, text=True).stdout
+    return str(pid) in out
+
+
+def other_sessions_using(model, me=None):
+    me = me or os.getpid()
+    users = 0
+    for f in (SESSIONS.glob("*.model") if SESSIONS.exists() else []):
+        try:
+            pid = int(f.stem)
+        except ValueError:
+            continue
+        if pid == me:
+            continue
+        if not _alive(pid):
+            f.unlink(missing_ok=True)  # left behind by a window that crashed
+        elif f.read_text(encoding="utf-8").strip() == model:
+            users += 1
+    return users
+
+
+def register_session(model):
+    SESSIONS.mkdir(parents=True, exist_ok=True)
+    (SESSIONS / f"{os.getpid()}.model").write_text(model, encoding="utf-8")
+
+
+_released = threading.Lock()
+
+
+def release_model(model):
+    """Forget this window and free the model if no other George window uses it."""
+    if not _released.acquire(blocking=False):
+        return  # already done (normal exit and window close can both call this)
+    (SESSIONS / f"{os.getpid()}.model").unlink(missing_ok=True)
+    if other_sessions_using(model):
+        return
+    try:
+        unload(model)
+    except OllamaError:
+        pass  # Ollama already gone: nothing is loaded
+
+
+def on_window_close(model):
+    """Free the model when the George window is closed with its X button too."""
+    if os.name != "nt":
+        return
+    import ctypes
+    HANDLER = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_uint)
+
+    def handler(event):
+        if event in (2, 5, 6):  # window closed, log off, shut down
+            release_model(model)
+        return False
+    on_window_close.keep = HANDLER(handler)  # must outlive this function
+    ctypes.windll.kernel32.SetConsoleCtrlHandler(on_window_close.keep, True)
 
 
 # ---------- relay ----------
@@ -244,7 +310,16 @@ def main():
         cmd += ["--"] + extra
 
     print(f"\nLaunching {tool} with {f['name']} in \"{folder}\"\n")
-    sys.exit(subprocess.call(cmd, cwd=folder, env=env))
+    register_session(f["name"])
+    on_window_close(f["name"])
+    code = 130
+    try:
+        code = subprocess.call(cmd, cwd=folder, env=env)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        release_model(f["name"])
+    sys.exit(code)
 
 
 if __name__ == "__main__":

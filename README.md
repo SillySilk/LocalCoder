@@ -17,6 +17,8 @@ Regular `claude` is unaffected. The local settings only apply inside the LocalCo
 
 Switching models is just closing the window and starting again with a different pick.
 
+With Model Manager's "stay loaded" set to **forever**, the model stays in graphics memory for the whole session, so a pause never means a slow reload and re-read of the conversation. George frees it when its window closes (unless another George window is using the same model).
+
 ## Model Manager
 A companion app for Ollama chores, so you never need to type Ollama commands. Double-click `ModelManager.bat`, or run `install-command.bat models ModelManager.bat` once and then type `models` in any terminal.
 
@@ -45,7 +47,8 @@ Tests: `python -m pytest tests/mm` (needs Ollama running and internet; downloads
 The example Modelfile is set up for a Qwen3-Coder-family model (the one this was first tested with: an abliterated Qwen3-Coder-30B-A3B). Swap in whatever fits the work.
 
 ## Plugins and the relay
-- **Relay (`lc_proxy.py`).** Claude Code sends the skill list, the names of extra tools and plugin start-up notes in a block that Ollama silently drops (about 10k tokens; found on Ollama 0.40.16). Without it the local model never sees your skills or extra tools. The launcher starts a small relay on port 11435 that moves that block where Ollama keeps it. It runs in a minimised "LocalCoder relay" window and can be left open. It keeps a short log in `logselay.log`: one line when each request starts, when Ollama first answers, and when it finishes or fails, so a stall can be traced afterwards. Set `LC_RELAY_LOG` to a file path to also record everything that passes through it (large).
+- **Relay (`lc_proxy.py`).** Claude Code sends the skill list, the names of extra tools and plugin start-up notes in a block that Ollama silently drops (about 10k tokens; found on Ollama 0.40.16). Without it the local model never sees your skills or extra tools. The launcher starts a small relay on port 11435 that moves that block where Ollama keeps it. It runs in a minimised "LocalCoder relay" window and can be left open. It keeps a short log in `logs
+elay.log`: one line when each request starts, when Ollama first answers, and when it finishes or fails, so a stall can be traced afterwards. Set `LC_RELAY_LOG` to a file path to also record everything that passes through it (large).
 - **Trimmed plugin list (`claude-settings.json`).** Every plugin adds text the model must read before each task, and local models have far less memory than Claude. This file (passed with `--settings`, LocalCoder only) switches off heavy plugins and keeps a few useful ones. Edit it to match the plugins you have; names you don't have are ignored. In testing, trimming cut start-up from ~29k to ~22.7k tokens.
 - **claude.ai connectors** (Gmail, Drive, Calendar…) don't work here. They need a Claude login, which the local setup replaces.
 - `python tests\measure_startup.py <model> [--lean]` shows how many tokens Claude Code uses before doing any work.
