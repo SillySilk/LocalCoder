@@ -12,7 +12,9 @@ convention is needed: tool support and context size come from the model.
 import argparse
 import os
 import subprocess
+import socket
 import sys
+import threading
 import time
 import urllib.error
 from pathlib import Path
@@ -23,6 +25,7 @@ ROOT = Path(__file__).resolve().parent
 RELAY_PORT = 11435
 MIN_CTX = 32768        # Claude Code needs ~23k just to start a task
 WANT_CTX = 65536       # comfortable default for agent work
+started_relays = []    # relay processes this launcher started
 
 
 # ---------- Ollama helpers ----------
@@ -78,13 +81,17 @@ def make_variant(f, ctx):
 
 # ---------- relay ----------
 
-def ensure_relay():
-    url = f"http://127.0.0.1:{RELAY_PORT}"
+def relay_up(port=RELAY_PORT):
+    """True if something is accepting connections on the relay port.
+    Checks the port only, so a stopped Ollama doesn't look like a dead relay."""
     try:
-        api("/api/version", base=url, timeout=3)
-        return
+        socket.create_connection(("127.0.0.1", port), timeout=2).close()
+        return True
     except OSError:
-        pass
+        return False
+
+
+def start_relay(port=RELAY_PORT):
     flags = getattr(subprocess, "CREATE_NEW_CONSOLE", 0)
     kw = {"creationflags": flags} if flags else {}
     if flags:
@@ -92,15 +99,35 @@ def ensure_relay():
         si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
         si.wShowWindow = 7  # minimised, not focused
         kw["startupinfo"] = si
-    subprocess.Popen([sys.executable, str(ROOT / "lc_proxy.py"), str(RELAY_PORT)], **kw)
-    for _ in range(15):
-        time.sleep(1)
-        try:
-            api("/api/version", base=url, timeout=3)
-            return
-        except OSError:
-            pass
-    sys.exit("The LocalCoder relay did not start.")
+    proc = subprocess.Popen([sys.executable, str(ROOT / "lc_proxy.py"), str(port)], **kw)
+    started_relays.append(proc)
+    return proc
+
+
+def ensure_relay(port=RELAY_PORT):
+    """Start the relay if it isn't running. Returns False if it won't come up."""
+    if relay_up(port):
+        return True
+    start_relay(port)
+    for _ in range(30):
+        time.sleep(0.5)
+        if relay_up(port):
+            return True
+    return False
+
+
+def watch_relay(port=RELAY_PORT, every=2.0):
+    """Restart the relay whenever it stops (window closed, crash) while the
+    tool is running, so Claude Code's retries reconnect instead of failing.
+    Set the returned event to stop watching."""
+    stop = threading.Event()
+
+    def loop():
+        while not stop.wait(every):
+            if not relay_up(port):
+                ensure_relay(port)
+    threading.Thread(target=loop, daemon=True).start()
+    return stop
 
 
 # ---------- interaction ----------
@@ -208,7 +235,9 @@ def main():
         ctx = f["num_ctx"] or MIN_CTX
         env["CLAUDE_CODE_MAX_CONTEXT_TOKENS"] = str(ctx)
         env["CLAUDE_CODE_MAX_OUTPUT_TOKENS"] = str(min(8192, ctx // 8))
-        ensure_relay()
+        if not ensure_relay():
+            sys.exit("The LocalCoder relay did not start.")
+        watch_relay()
         env["OLLAMA_HOST"] = f"127.0.0.1:{RELAY_PORT}"
         extra = ["--settings", str(ROOT / "claude-settings.json")] + extra
     if extra:

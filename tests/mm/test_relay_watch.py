@@ -1,0 +1,31 @@
+import time
+
+import lc_launch
+
+PORT = 11499  # away from the real relay so a live George session isn't touched
+
+
+def wait_for(cond, secs):
+    end = time.time() + secs
+    while time.time() < end:
+        if cond():
+            return True
+        time.sleep(0.2)
+    return False
+
+
+def test_relay_restarts_after_it_stops():
+    stop = None
+    try:
+        assert lc_launch.ensure_relay(PORT)
+        stop = lc_launch.watch_relay(PORT, every=0.5)
+        lc_launch.started_relays[-1].kill()
+        assert wait_for(lambda: len(lc_launch.started_relays) >= 2, 10), "relay was not restarted"
+        assert wait_for(lambda: lc_launch.relay_up(PORT), 20), "restarted relay isn't answering"
+        assert lc_launch.started_relays[0].poll() is not None  # the first one really died
+    finally:
+        if stop:
+            stop.set()
+            time.sleep(1)  # let the watcher finish any restart it began
+        for p in lc_launch.started_relays:
+            p.kill()
