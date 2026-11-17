@@ -9,6 +9,13 @@ from mm_import import blob_digest, clean_path, fix_tools, import_gguf, suggest_n
 TINY_REPO = "bartowski/SmolLM2-135M-Instruct-GGUF"
 TINY_FILE = "SmolLM2-135M-Instruct-Q4_K_M.gguf"
 TEST_MODELS = ["mm-test-import", "mm-test-good", "mm-test-bad"]
+# A chat format that mentions .Tools, which is what makes Ollama report tool use.
+# Kept here so the test doesn't depend on which models happen to be installed.
+TOOLS_TEMPLATE = (
+    "{{- if .Tools }}<|im_start|>system\nTools: {{ range .Tools }}{{ . }}{{ end }}<|im_end|>\n{{ end }}"
+    "{{- range .Messages }}<|im_start|>{{ .Role }}\n{{ .Content }}<|im_end|>\n{{ end }}"
+    "<|im_start|>assistant\n"
+)
 
 
 @pytest.fixture(scope="module")
@@ -46,8 +53,7 @@ def _create(name, gguf, template):
 
 def test_fix_tools_copies_from_donor(tiny_gguf):
     import_gguf(tiny_gguf, "mm-test-import", lambda *a: None)  # makes sure the blob is uploaded
-    tools_template = call("/api/show", {"model": "granite3.3:8b"})["template"]
-    _create("mm-test-good", tiny_gguf, tools_template)
+    _create("mm-test-good", tiny_gguf, TOOLS_TEMPLATE)
     _create("mm-test-bad", tiny_gguf, "{{ .Prompt }}")
     assert model_facts("mm-test-good")["tools"] is True
     assert model_facts("mm-test-bad")["tools"] is False
@@ -58,12 +64,14 @@ def test_fix_tools_copies_from_donor(tiny_gguf):
 
 def test_fix_tools_no_donor(tiny_gguf):
     import_gguf(tiny_gguf, "mm-test-import", lambda *a: None)
+    # Create the tool-less model first: it keeps the shared model file alive,
+    # which Ollama removes once no model uses it.
+    _create("mm-test-bad", tiny_gguf, "{{ .Prompt }}")
     for m in ("mm-test-good", "mm-test-import"):
         try:
             delete(m)
         except OllamaError:
             pass
-    _create("mm-test-bad", tiny_gguf, "{{ .Prompt }}")
     arch = model_facts("mm-test-bad")["arch"]
     others = [m["name"] for m in installed() if not m["name"].startswith("mm-test-bad")
               and model_facts(m["name"])["tools"] and model_facts(m["name"])["arch"] == arch]
