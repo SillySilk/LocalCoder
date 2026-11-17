@@ -25,3 +25,11 @@
 | 2026-11-14 | opencode | qwen3-coder-uncensored-64k | 2-fix-bug | PASS | 0.8 min |
 | 2026-11-14 | opencode | qwen3-coder-uncensored-64k | 3-add-function | PASS | 4.7 min |
 | 2026-11-14 | opencode | qwen3-coder-uncensored-64k | 4-rename | PASS | 2.2 min |
+| 2026-11-17 | claude | hf.co-HauhauCS-Qwen3.5-9B-Uncensored-HauhauCS-Aggressive-Q6_K-128k:latest | 1-explain | PASS | 5.7 min |
+| 2026-11-17 | claude | hf.co-HauhauCS-Qwen3.5-9B-Uncensored-HauhauCS-Aggressive-Q6_K-128k:latest | 2-fix-bug | PASS | 0.6 min |
+| 2026-11-17 | claude | hf.co-HauhauCS-Qwen3.5-9B-Uncensored-HauhauCS-Aggressive-Q6_K-128k:latest | 3-add-function | PASS | 0.7 min |
+| 2026-11-17 | claude | hf.co-HauhauCS-Qwen3.5-9B-Uncensored-HauhauCS-Aggressive-Q6_K-128k:latest | 4-rename | PASS | 1.0 min |
+| 2026-11-17 | opencode | hf.co-HauhauCS-Qwen3.5-9B-Uncensored-HauhauCS-Aggressive-Q6_K-128k:latest | 1-explain | PASS | 0.3 min |
+| 2026-11-17 | opencode | hf.co-HauhauCS-Qwen3.5-9B-Uncensored-HauhauCS-Aggressive-Q6_K-128k:latest | 2-fix-bug | PASS | 0.4 min |
+| 2026-11-17 | opencode | hf.co-HauhauCS-Qwen3.5-9B-Uncensored-HauhauCS-Aggressive-Q6_K-128k:latest | 3-add-function | PASS | 0.5 min |
+| 2026-11-17 | opencode | hf.co-HauhauCS-Qwen3.5-9B-Uncensored-HauhauCS-Aggressive-Q6_K-128k:latest | 4-rename | PASS | 0.6 min |
