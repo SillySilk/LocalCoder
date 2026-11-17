@@ -14,12 +14,36 @@ import http.client
 import json
 import os
 import sys
+import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlsplit
 
 PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 11435
 UPSTREAM = urlsplit(sys.argv[2] if len(sys.argv) > 2 else "http://127.0.0.1:11434")
 DEBUG_LOG = os.environ.get("LC_RELAY_LOG")  # optional: record requests/responses here
+_start_lock = threading.Lock()
+
+
+def _open_upstream(method, path, body, headers):
+    """Send the request to Ollama. If Ollama isn't running (stopped, or being
+    restarted by Model Manager), start it and try once more."""
+    for attempt in (1, 2):
+        conn = http.client.HTTPConnection(UPSTREAM.hostname, UPSTREAM.port or 80, timeout=1800)
+        try:
+            conn.request(method, path, body=body, headers=headers)
+            return conn, conn.getresponse()
+        except ConnectionRefusedError:
+            conn.close()
+            if attempt == 2:
+                raise
+            with _start_lock:
+                try:
+                    from lc_ollama import start_ollama
+                    start_ollama()
+                except SystemExit:  # start_ollama gives up this way
+                    raise ConnectionRefusedError("Ollama did not start") from None
+
+
 HOP = {"host", "content-length", "transfer-encoding", "connection", "keep-alive"}
 
 
@@ -76,9 +100,21 @@ class Relay(BaseHTTPRequestHandler):
         headers = {k: v for k, v in self.headers.items() if k.lower() not in HOP}
         if body is not None:
             headers["Content-Length"] = str(len(body))
-        conn = http.client.HTTPConnection(UPSTREAM.hostname, UPSTREAM.port or 80, timeout=1800)
-        conn.request(self.command, self.path, body=body, headers=headers)
-        resp = conn.getresponse()
+        try:
+            conn, resp = _open_upstream(self.command, self.path, body, headers)
+        except ConnectionRefusedError:
+            # A real reply instead of a dropped connection: Claude Code shows the
+            # message and retries, rather than reporting a network failure.
+            msg = json.dumps({"type": "error", "error": {
+                "type": "api_error",
+                "message": "Ollama is not running and could not be started. "
+                           "Open the Ollama app, then try again."}}).encode()
+            self.send_response(503)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(msg)))
+            self.end_headers()
+            self.wfile.write(msg)
+            return
         self.send_response(resp.status, resp.reason)
         for k, v in resp.getheaders():
             if k.lower() not in HOP:
