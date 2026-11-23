@@ -1,90 +1,50 @@
-"""LocalCoder launcher: pick any Ollama model, check it can work as an agent,
-make sure it has enough memory (context), then start Claude Code or OpenCode.
+"""LocalCoder launcher: pick a model from the shared engine (Engine Manager),
+then start Claude Code or OpenCode on it.
 
 Usage:
     python lc_launch.py [project_folder] [--model NAME] [--tool claude|opencode]
                         [--yes] [-- extra args for the tool]
 
-Everything is read from Ollama itself (/api/tags, /api/show), so no naming
-convention is needed: tool support and context size come from the model.
+The model list, memory sizes and the default model come from Engine Manager.
+Enter at the model prompt picks the default model.
 """
 
 import argparse
+import json
 import os
-import subprocess
+import shutil
 import socket
+import subprocess
 import sys
 import threading
 import time
-import urllib.error
 from pathlib import Path
 
-from lc_ollama import OllamaError, api, model_facts, start_ollama, unload
+import lc_engine
 
 ROOT = Path(__file__).resolve().parent
 RELAY_PORT = 11435
 MIN_CTX = 32768        # Claude Code needs ~23k just to start a task
-WANT_CTX = 65536       # comfortable default for agent work
 started_relays = []    # relay processes this launcher started
 SESSIONS = ROOT / "logs" / "sessions"   # one file per open George window: the model it uses
 
 
-# ---------- Ollama helpers ----------
-
-def list_models():
-    names = [m["name"] for m in api("/api/tags").get("models", [])]
-    facts = []
-    for n in names:
-        try:
-            f = model_facts(n)
-        except (OSError, ValueError):
-            continue
-        if not f["embedding_only"]:
-            facts.append(f)
-    # agent-ready first (tools + enough context), then tools, then the rest
-    def rank(f):
-        ready = f["tools"] and (f["num_ctx"] or 0) >= MIN_CTX
-        return (not ready, not f["tools"], f["name"])
-    return sorted(facts, key=rank)
-
-
 def describe(f):
-    bits = [f"{f['size']} {f['quant']}".strip()]
-    bits.append(f"{(f['num_ctx'] or 0) // 1024}k memory" if f["num_ctx"] else "default memory")
-    if f["thinking"]:
-        bits.append("thinks")
-    if not f["tools"]:
-        bits.append("NO TOOL USE")
-    return ", ".join(b for b in bits if b)
-
-
-def variant_name(name, ctx):
-    base = name[:-len(":latest")] if name.endswith(":latest") else name
-    return f"{base.replace(':', '-').replace('/', '-')}-{ctx // 1024}k"
-
-
-def make_variant(f, ctx):
-    """Create <model>-NNk: same model files, just a bigger context. Takes seconds."""
-    new = variant_name(f["name"], ctx)
-    print(f"Creating {new} (same model, {ctx // 1024}k memory)...")
-    try:
-        r = api("/api/create", {"model": new, "from": f["name"], "stream": False,
-                                "parameters": {"num_ctx": ctx}}, timeout=600)
-    except urllib.error.HTTPError as e:
-        sys.exit(f"Could not create {new}: {e.read().decode(errors='replace')}")
-    if r.get("status") != "success":
-        sys.exit(f"Could not create {new}: {r}")
-    made = model_facts(new)
-    if made["tools"] != f["tools"]:
-        sys.exit(f"{new} lost tool support when copied; please report this.")
-    return made
+    bits = []
+    if f["size"]:
+        bits.append(f"{f['size'] / 10**9:.1f} GB")
+    bits.append(f"{f['ctx'] // 1024}k memory")
+    if f["vision"]:
+        bits.append("reads images")
+    if f["state"] in ("loaded", "loading", "sleeping"):
+        bits.append("loaded now")
+    return ", ".join(bits)
 
 
 # ---------- keeping the model loaded ----------
-# Ollama is set to keep models loaded until told otherwise (Model Manager:
-# stay loaded = forever), so a pause never forces a slow reload and re-read.
-# George frees the model when it closes, unless another George window is
-# still using it.
+# The engine keeps a model loaded until told otherwise, so a pause never forces
+# a slow reload and re-read. George frees the model when it closes, unless
+# another George window is still using it.
 
 def _alive(pid):
     out = subprocess.run(["tasklist", "/FI", f"PID eq {pid}", "/NH"],
@@ -117,17 +77,14 @@ def register_session(model):
 _released = threading.Lock()
 
 
-def release_model(model):
+def release_model(model, unload=None):
     """Forget this window and free the model if no other George window uses it."""
     if not _released.acquire(blocking=False):
         return  # already done (normal exit and window close can both call this)
     (SESSIONS / f"{os.getpid()}.model").unlink(missing_ok=True)
     if other_sessions_using(model):
         return
-    try:
-        unload(model)
-    except OllamaError:
-        pass  # Ollama already gone: nothing is loaded
+    (unload or lc_engine.unload)(model)
 
 
 def on_window_close(model):
@@ -148,8 +105,7 @@ def on_window_close(model):
 # ---------- relay ----------
 
 def relay_up(port=RELAY_PORT):
-    """True if something is accepting connections on the relay port.
-    Checks the port only, so a stopped Ollama doesn't look like a dead relay."""
+    """True if something is accepting connections on the relay port."""
     try:
         socket.create_connection(("127.0.0.1", port), timeout=2).close()
         return True
@@ -157,7 +113,7 @@ def relay_up(port=RELAY_PORT):
         return False
 
 
-def start_relay(port=RELAY_PORT):
+def start_relay(port=RELAY_PORT, upstream=None):
     flags = getattr(subprocess, "CREATE_NEW_CONSOLE", 0)
     kw = {"creationflags": flags} if flags else {}
     if flags:
@@ -165,16 +121,17 @@ def start_relay(port=RELAY_PORT):
         si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
         si.wShowWindow = 7  # minimised, not focused
         kw["startupinfo"] = si
-    proc = subprocess.Popen([sys.executable, str(ROOT / "lc_proxy.py"), str(port)], **kw)
+    args = [sys.executable, str(ROOT / "lc_proxy.py"), str(port)] + ([upstream] if upstream else [])
+    proc = subprocess.Popen(args, **kw)
     started_relays.append(proc)
     return proc
 
 
-def ensure_relay(port=RELAY_PORT):
+def ensure_relay(port=RELAY_PORT, upstream=None):
     """Start the relay if it isn't running. Returns False if it won't come up."""
     if relay_up(port):
         return True
-    start_relay(port)
+    start_relay(port, upstream)
     for _ in range(30):
         time.sleep(0.5)
         if relay_up(port):
@@ -182,7 +139,7 @@ def ensure_relay(port=RELAY_PORT):
     return False
 
 
-def watch_relay(port=RELAY_PORT, every=2.0):
+def watch_relay(port=RELAY_PORT, every=2.0, upstream=None):
     """Restart the relay whenever it stops (window closed, crash) while the
     tool is running, so Claude Code's retries reconnect instead of failing.
     Set the returned event to stop watching."""
@@ -191,7 +148,7 @@ def watch_relay(port=RELAY_PORT, every=2.0):
     def loop():
         while not stop.wait(every):
             if not relay_up(port):
-                ensure_relay(port)
+                ensure_relay(port, upstream)
     threading.Thread(target=loop, daemon=True).start()
     return stop
 
@@ -208,12 +165,10 @@ def ask(prompt, default):
 
 def choose_model(models):
     print("\n===== Pick a model =====")
-    shown_rest = False
     for i, f in enumerate(models, 1):
-        if not f["tools"] and not shown_rest:
-            print("  --- can't use tools (chat only, won't work as an agent) ---")
-            shown_rest = True
-        print(f"  {i}) {f['name']}  ({describe(f)})")
+        star = "  * default" if f["default"] else ""
+        print(f"  {i}) {f['name']}  ({describe(f)}){star}")
+    print("  Manage models: Engine Manager (EngineManager.bat)")
     pick = ask("\nModel number", "1")
     try:
         return models[int(pick) - 1]
@@ -221,30 +176,44 @@ def choose_model(models):
         sys.exit("Invalid choice.")
 
 
-def prepare(f, auto_yes):
-    """Make sure the model can act as an agent and has enough memory."""
-    if not f["tools"]:
-        print(f"\n{f['name']} doesn't support tool use, so it can't read or edit files as an agent.")
-        if auto_yes or ask("Start anyway? (y/n)", "n").lower() != "y":
-            sys.exit(1)
-    ctx = f["num_ctx"] or 0
-    if ctx >= MIN_CTX:
-        return f
-    cap = f["max_ctx"] or WANT_CTX
-    target = min(WANT_CTX, cap)
-    if target < MIN_CTX:
-        print(f"\nWarning: {f['name']} can only hold {cap // 1024}k tokens; Claude Code needs ~23k to start.")
-        target = cap
-    have = variant_name(f["name"], target)
-    names = {m["name"] for m in api("/api/tags").get("models", [])}
-    if have in names or f"{have}:latest" in names:
-        print(f"\nUsing {have} (the {target // 1024}k-memory version of {f['name']}).")
-        return model_facts(have)
-    print(f"\n{f['name']} is set to {'Ollama' + chr(39) + 's default' if not ctx else f'{ctx // 1024}k'} memory, "
-          f"too little for agent work.")
-    if auto_yes or ask(f"Make a {target // 1024}k version now? (y/n)", "y").lower() == "y":
-        return make_variant(f, target)
-    return f
+def check_memory(f):
+    if f["ctx"] < MIN_CTX:
+        print(f"\nWarning: {f['name']} is set to {f['ctx'] // 1024}k memory; Claude Code needs about 23k "
+              f"just to start. Raise it in Engine Manager (Memory column).")
+
+
+def opencode_config(model):
+    """OpenCode settings that point it at the engine's OpenAI-style endpoint."""
+    return json.dumps({
+        "$schema": "https://opencode.ai/config.json",
+        "provider": {"engine": {
+            "npm": "@ai-sdk/openai-compatible",
+            "name": "Local engine",
+            "options": {"baseURL": lc_engine.url("/v1"), "apiKey": "local"},
+            "models": {model: {"name": model, "tools": True}},
+        }},
+        "model": f"engine/{model}",
+    })
+
+
+def build_command(tool, f, folder, passthrough, env):
+    """The command line and environment for the chosen tool."""
+    name = f["name"]
+    if tool == "claude":
+        exe = shutil.which("claude") or "claude"
+        env["ANTHROPIC_BASE_URL"] = f"http://127.0.0.1:{RELAY_PORT}"
+        env["ANTHROPIC_AUTH_TOKEN"] = "local"
+        env["ANTHROPIC_API_KEY"] = ""
+        env["ANTHROPIC_MODEL"] = name
+        for k in ("OPUS", "SONNET", "HAIKU", "FABLE"):
+            env[f"ANTHROPIC_DEFAULT_{k}_MODEL"] = name
+        env["CLAUDE_CODE_SUBAGENT_MODEL"] = name
+        env["CLAUDE_CODE_MAX_CONTEXT_TOKENS"] = str(f["ctx"])
+        env["CLAUDE_CODE_MAX_OUTPUT_TOKENS"] = str(min(8192, f["ctx"] // 8))
+        return [exe, "--model", name, "--settings", str(ROOT / "claude-settings.json")] + passthrough
+    exe = shutil.which("opencode") or "opencode"
+    env["OPENCODE_CONFIG_CONTENT"] = opencode_config(name)
+    return [exe, str(folder)] + passthrough
 
 
 def main():
@@ -264,20 +233,21 @@ def main():
     if not folder.is_dir():
         sys.exit(f"Folder not found: {folder}")
 
-    start_ollama()
+    lc_engine.start_engine()
+    models = lc_engine.models()
+    if not models:
+        sys.exit("No models yet. Open Engine Manager (EngineManager.bat) and download one.")
     if a.model:
-        try:
-            f = model_facts(a.model)
-        except urllib.error.HTTPError:
-            sys.exit(f"Model not installed: {a.model}")
+        f = next((m for m in models if m["name"] == a.model), None)
+        if not f:
+            sys.exit(f"Model not found: {a.model}. Names are listed in Engine Manager.")
+    elif a.yes:
+        f = models[0]  # the default model sorts first
     else:
-        models = list_models()
-        if not models:
-            sys.exit("No models installed. Get one with: ollama pull <model>  (see https://ollama.com/search?c=tools)")
         f = choose_model(models)
-    f = prepare(f, a.yes)
+    check_memory(f)
 
-    tool = a.tool
+    tool = a.tool or ("claude" if a.yes else None)
     if not tool:
         print("\n===== Pick a tool =====")
         print("  1) Claude Code  (keeps your hooks, skills, CLAUDE.md)")
@@ -290,24 +260,14 @@ def main():
     # OpenCode trusts PWD over the real working folder; a stale PWD (e.g. from
     # Git Bash) makes it work in the wrong project.
     env["PWD"] = str(folder.resolve())
-    cmd = ["ollama", "launch", tool, "--model", f["name"]]
-    if a.yes:
-        cmd.append("--yes")
-    extra = list(passthrough)
+    cmd = build_command(tool, f, folder, list(passthrough), env)
     if tool == "claude":
-        for k in ("OPUS", "SONNET", "HAIKU", "FABLE"):
-            env[f"ANTHROPIC_DEFAULT_{k}_MODEL"] = f["name"]
-        env["CLAUDE_CODE_SUBAGENT_MODEL"] = f["name"]
-        ctx = f["num_ctx"] or MIN_CTX
-        env["CLAUDE_CODE_MAX_CONTEXT_TOKENS"] = str(ctx)
-        env["CLAUDE_CODE_MAX_OUTPUT_TOKENS"] = str(min(8192, ctx // 8))
-        if not ensure_relay():
+        # The relay folds Claude Code's mid-conversation system messages into
+        # user text; many models' chat formats reject them otherwise.
+        upstream = lc_engine.url()
+        if not ensure_relay(upstream=upstream):
             sys.exit("The LocalCoder relay did not start.")
-        watch_relay()
-        env["OLLAMA_HOST"] = f"127.0.0.1:{RELAY_PORT}"
-        extra = ["--settings", str(ROOT / "claude-settings.json")] + extra
-    if extra:
-        cmd += ["--"] + extra
+        watch_relay(upstream=upstream)
 
     print(f"\nLaunching {tool} with {f['name']} in \"{folder}\"\n")
     register_session(f["name"])

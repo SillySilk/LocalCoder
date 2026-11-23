@@ -1,13 +1,13 @@
-"""LocalCoder relay between Claude Code and Ollama.
+"""LocalCoder relay between Claude Code and the shared engine.
 
 Claude Code sends some context (skill list, deferred tool names, SessionStart
-hook output) as a role "system" message inside `messages`. Ollama's
-Anthropic-compatible endpoint silently drops those, so the local model never
-sees them. This relay rewrites each such message into a user-side
-<system-reminder> text block, then forwards everything else to Ollama
+hook output) as a role "system" message inside `messages`. Many models' chat
+formats reject those ("System message must be at the beginning"), and Ollama
+used to drop them silently. This relay rewrites each such message into a
+user-side <system-reminder> text block, then forwards everything else to the engine
 untouched, streaming responses back as they arrive.
 
-Usage: python lc_proxy.py [listen_port] [ollama_url]
+Usage: python lc_proxy.py [listen_port] [engine_url]
 """
 
 import http.client
@@ -21,7 +21,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlsplit
 
 PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 11435
-UPSTREAM = urlsplit(sys.argv[2] if len(sys.argv) > 2 else "http://127.0.0.1:11434")
+UPSTREAM = urlsplit(sys.argv[2] if len(sys.argv) > 2 else __import__("lc_engine").url())
 DEBUG_LOG = os.environ.get("LC_RELAY_LOG")  # optional: record requests/responses here
 _start_lock = threading.Lock()
 
@@ -55,8 +55,8 @@ def describe(body):
 
 
 def _open_upstream(method, path, body, headers):
-    """Send the request to Ollama. If Ollama isn't running (stopped, or being
-    restarted by Model Manager), start it and try once more."""
+    """Send the request to the engine. If it isn't running (stopped, or being
+    restarted from Engine Manager), start it and try once more."""
     for attempt in (1, 2):
         conn = http.client.HTTPConnection(UPSTREAM.hostname, UPSTREAM.port or 80, timeout=1800)
         try:
@@ -68,10 +68,10 @@ def _open_upstream(method, path, body, headers):
                 raise
             with _start_lock:
                 try:
-                    from lc_ollama import start_ollama
-                    start_ollama()
-                except SystemExit:  # start_ollama gives up this way
-                    raise ConnectionRefusedError("Ollama did not start") from None
+                    from lc_engine import start_engine
+                    start_engine()
+                except SystemExit:  # start_engine gives up this way
+                    raise ConnectionRefusedError("engine did not start") from None
 
 
 HOP = {"host", "content-length", "transfer-encoding", "connection", "keep-alive"}
@@ -135,7 +135,7 @@ class Relay(BaseHTTPRequestHandler):
             raise
         except TimeoutError:
             if track:
-                log_event(f"[{rid}] Ollama sent nothing for 30 min, gave up after {time.monotonic() - t0:.1f}s")
+                log_event(f"[{rid}] engine sent nothing for 30 min, gave up after {time.monotonic() - t0:.1f}s")
             raise
         except Exception as e:
             if track:
@@ -155,13 +155,13 @@ class Relay(BaseHTTPRequestHandler):
             conn, resp = _open_upstream(self.command, self.path, body, headers)
         except ConnectionRefusedError:
             if track:
-                log_event(f"[{rid}] Ollama not running and could not be started")
+                log_event(f"[{rid}] engine not running and could not be started")
             # A real reply instead of a dropped connection: Claude Code shows the
             # message and retries, rather than reporting a network failure.
             msg = json.dumps({"type": "error", "error": {
                 "type": "api_error",
-                "message": "Ollama is not running and could not be started. "
-                           "Open the Ollama app, then try again."}}).encode()
+                "message": "The AI engine is not running and could not be started. "
+                           "Open Engine Manager, then try again."}}).encode()
             self.send_response(503)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(msg)))
@@ -191,7 +191,7 @@ class Relay(BaseHTTPRequestHandler):
             if first is None:
                 first = time.monotonic() - t0
                 if track:
-                    log_event(f"[{rid}] Ollama status {resp.status}, first reply after {first:.1f}s")
+                    log_event(f"[{rid}] engine status {resp.status}, first reply after {first:.1f}s")
             if track and resp.status >= 400 and len(err) < 500:
                 err += chunk
             if debug:

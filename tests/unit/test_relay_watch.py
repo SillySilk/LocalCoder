@@ -55,15 +55,16 @@ def _post_through_relay(port, upstream):
         proc.kill()
 
 
-def test_relay_answers_clearly_when_ollama_is_unreachable():
-    # Nothing listens on 11497, and starting Ollama can't fix that, so the relay
-    # must give a real error reply rather than dropping the connection.
+def test_relay_answers_clearly_when_engine_is_unreachable():
+    # Nothing listens on 11497, and starting the engine can't fix that (it
+    # listens elsewhere), so the relay must give a real error reply rather than
+    # dropping the connection.
     status, body = _post_through_relay(11496, "http://127.0.0.1:11497")
     assert status == 503
-    assert b"Ollama is not running" in body
+    assert b"engine is not running" in body
 
 
-def _fake_ollama(port, status, body):
+def _fake_engine(port, status, body):
     import threading
     from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -90,7 +91,7 @@ def _logged_request(tmp_path, status, body):
     import urllib.error
     import urllib.request
     log = tmp_path / "relay.log"
-    srv = _fake_ollama(11493, status, body)
+    srv = _fake_engine(11493, status, body)
     proc = subprocess.Popen([sys.executable, str(lc_launch.ROOT / "lc_proxy.py"), "11494",
                              "http://127.0.0.1:11493"], stderr=subprocess.DEVNULL,
                             env={**os.environ, "LC_RELAY_EVENTS": str(log)})
@@ -118,7 +119,7 @@ def test_relay_log_records_each_request(tmp_path):
     assert "done status 200" in text
 
 
-def test_relay_log_records_ollama_errors(tmp_path):
+def test_relay_log_records_engine_errors(tmp_path):
     text = _logged_request(tmp_path, 500, b'{"error": "model ran out of memory"}')
     assert "done status 500" in text
     assert "model ran out of memory" in text

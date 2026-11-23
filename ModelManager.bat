@@ -1,14 +1,8 @@
 @echo off
-setlocal
-title Model Manager - Ollama models for George
-
-where python >nul 2>&1
-if errorlevel 1 (
-    echo Model Manager needs Python 3. Install it from https://www.python.org and try again.
+REM Models are now managed by Engine Manager (the shared AI engine for all apps).
+if not exist "C:\AI\EngineManager\EngineManager.bat" (
+    echo Engine Manager not found at C:\AI\EngineManager
     pause
     exit /b 1
 )
-
-python "%~dp0mm.py" %*
-if errorlevel 1 pause
-endlocal
+call "C:\AI\EngineManager\EngineManager.bat"
