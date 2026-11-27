@@ -6,15 +6,22 @@
 // shared Engine Manager engine (BOW_ENGINE_URL) so it never starts a second
 // copy of a model — then runs one download over its WebSocket.
 //
-// Settings (environment): BOW_DIR (AgentBow folder), ENGINE_URL (shared engine).
+// AgentBow exits after BOW_IDLE_SECS (default 120) with nothing to do, so it
+// isn't left in memory; the next call starts it again (a few seconds' delay).
+//
+// Settings (environment): BOW_DIR (AgentBow folder), ENGINE_URL (shared engine),
+// BOW_IDLE_SECS.
 
 import { spawn } from "node:child_process";
-import { readFileSync, existsSync, mkdirSync, copyFileSync, readdirSync, statSync } from "node:fs";
+import { readFileSync, existsSync, mkdirSync, copyFileSync, statSync, unlinkSync } from "node:fs";
 import { join, basename, resolve } from "node:path";
+import { tmpdir } from "node:os";
 import { createInterface } from "node:readline";
 
 const BOW_DIR = process.env.BOW_DIR || "C:\\AI\\Apps\\agent Bow";
 const ENGINE_URL = process.env.ENGINE_URL || "http://127.0.0.1:8090";
+// AgentBow shuts itself down after this many idle seconds (it restarts on the next call).
+const IDLE_SECS = process.env.BOW_IDLE_SECS || "120";
 const EXE = join(BOW_DIR, "desktop", "src-tauri", "target", "debug", "bow-desktop.exe");
 
 function bowEnv() {
@@ -30,22 +37,35 @@ function bowEnv() {
 }
 
 const cfg = bowEnv();
-const PORT = Number(cfg.BOW_WS_PORT || 9357);
+// AgentBow falls back to another port when its usual one is busy; it writes
+// the port it actually got to this file.
+const PORT_FILE = join(tmpdir(), "bow-images.port");
+let port = Number(cfg.BOW_WS_PORT || 9357);
 const WORKSPACE = cfg.BOW_WORKSPACE || "C:\\AI\\workspace";
 
-async function bowUp() {
+async function healthy(p) {
   try {
-    const r = await fetch(`http://127.0.0.1:${PORT}/api/health`, { signal: AbortSignal.timeout(2000) });
+    const r = await fetch(`http://127.0.0.1:${p}/api/health`, { signal: AbortSignal.timeout(2000) });
     return r.ok;
   } catch { return false; }
 }
 
+async function bowUp() {
+  const candidates = [port];
+  try { candidates.unshift(Number(readFileSync(PORT_FILE, "utf8").trim())); } catch {}
+  for (const p of candidates) {
+    if (p && await healthy(p)) { port = p; return true; }
+  }
+  return false;
+}
+
 async function ensureBow() {
   if (await bowUp()) return;
+  try { unlinkSync(PORT_FILE); } catch {}
   if (!existsSync(EXE)) throw new Error(`AgentBow is not built yet (${EXE}). Run bow.bat once.`);
   const child = spawn(EXE, [], {
     cwd: join(BOW_DIR, "desktop", "src-tauri", "target", "debug"),
-    env: { ...process.env, BOW_ENGINE_URL: ENGINE_URL, BOW_NO_BROWSER: "1" },
+    env: { ...process.env, BOW_ENGINE_URL: ENGINE_URL, BOW_NO_BROWSER: "1", BOW_IDLE_EXIT_SECS: IDLE_SECS, BOW_PORT_FILE: PORT_FILE },
     detached: true, stdio: "ignore", windowsHide: true,
   });
   let spawnError = null;
@@ -70,7 +90,7 @@ async function download({ query, count = 10, dest_dir, verify = false, min_side 
   const staging = join(WORKSPACE, "bow-images", slug(query));
   mkdirSync(staging, { recursive: true });
 
-  const ws = new WebSocket(`ws://127.0.0.1:${PORT}/ws`);
+  const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`);
   const log = [];
   const result = await new Promise((resolveP, rejectP) => {
     const timer = setTimeout(() => { ws.close(); rejectP(new Error("download timed out after 20 minutes")); }, 20 * 60 * 1000);
