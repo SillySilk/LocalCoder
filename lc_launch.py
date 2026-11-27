@@ -270,7 +270,9 @@ def build_command(tool, f, folder, passthrough, env):
     for w in warnings:
         print(f"Note: {w}")
     env["OPENCODE_CONFIG_CONTENT"] = opencode_config(name, f["ctx"], addons)
-    return [exe, str(folder)] + passthrough
+    # A private backend per window: it closes with the window. The shared
+    # background service outlives windows and restarts their unfinished chats.
+    return [exe, "--standalone", str(folder)] + passthrough
 
 
 def main():

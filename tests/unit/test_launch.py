@@ -28,6 +28,7 @@ def test_opencode_gets_a_config_for_the_engine(tmp_path):
     env = {}
     cmd = lc_launch.build_command("opencode", BONSAI, tmp_path, [], env)
     assert cmd[-1] == str(tmp_path)
+    assert "--standalone" in cmd
     cfg = json.loads(env["OPENCODE_CONFIG_CONTENT"])
     assert cfg["model"] == "engine/Bonsai-PTQ1_0"
     prov = cfg["provider"]["engine"]
