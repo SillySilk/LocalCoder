@@ -150,8 +150,11 @@ function slug(s) {
 /** AgentBow went away before the download started; safe to retry. */
 class NotConnected extends Error {}
 
-/** One download over AgentBow's WebSocket. */
-function scrape(cfg, port, req, log) {
+/** One download over AgentBow's WebSocket. `progress(message, done, target)` is
+ *  called as photos are kept or rejected. */
+function scrape(cfg, port, req, log, progress) {
+  let kept = 0;
+  let rejected = 0;
   return new Promise((resolveP, rejectP) => {
     const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`);
     let inside = false;
@@ -179,6 +182,11 @@ function scrape(cfg, port, req, log) {
         if (m.kind === "source") log.push(`${m.source}: ${m.count} found${m.error ? ` (${m.error})` : ""}`);
         if (m.kind === "candidates") log.push(`candidates: ${m.total} (filtered ${m.filtered})`);
         if (m.kind === "failed") log.push(`skipped: ${m.reason}`);
+        if (m.kind === "downloaded") kept = m.done;
+        if (m.kind === "failed") rejected++;
+        if (m.kind === "downloaded" || m.kind === "failed") {
+          progress(`${req.query}: ${kept} of ${req.count} kept, ${rejected} rejected`, kept, req.count);
+        }
         if (m.kind === "error") finish(rejectP, new Error(m.message));
         if (m.kind === "done") finish(resolveP, m);
       }
@@ -186,7 +194,7 @@ function scrape(cfg, port, req, log) {
   });
 }
 
-async function download({ query, count = 10, dest_dir, verify = false, min_side = 512, delay_ms = 1500, sources }) {
+async function download({ query, count = 10, dest_dir, verify = false, min_side = 512, delay_ms = 1500, sources }, progress) {
   if (!query) throw new Error("query is required");
   const cfg = settings();
   // AgentBow only writes inside its workspace; download there, then copy out.
@@ -201,7 +209,7 @@ async function download({ query, count = 10, dest_dir, verify = false, min_side 
   for (let attempt = 1; ; attempt++) {
     const port = await ensureBow(cfg);
     try {
-      result = await scrape(cfg, port, req, log);
+      result = await scrape(cfg, port, req, log, progress);
       break;
     } catch (e) {
       if (!(e instanceof NotConnected) || attempt === 2) throw e;
@@ -264,8 +272,20 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
   } else if (method === "tools/list") {
     reply(id, { tools: TOOLS });
   } else if (method === "tools/call") {
+    // Progress updates while the download runs, for clients that ask for them
+    // (MCP progress notifications), and on stderr for the client's log.
+    const token = params?._meta?.progressToken;
+    const progress = (message, done, total) => {
+      process.stderr.write(`bow-images: ${message}\n`);
+      if (token !== undefined) {
+        process.stdout.write(JSON.stringify({
+          jsonrpc: "2.0", method: "notifications/progress",
+          params: { progressToken: token, progress: done, total, message },
+        }) + "\n");
+      }
+    };
     try {
-      const text = await download(params?.arguments || {});
+      const text = await download(params?.arguments || {}, progress);
       reply(id, { content: [{ type: "text", text }] });
     } catch (e) {
       reply(id, { content: [{ type: "text", text: `image_download failed: ${e.message}` }], isError: true });
