@@ -198,7 +198,8 @@ def forge_server(env):
             "environment": {"FORGE_NEO_ROOT": root}}
 
 
-BOW_DIR = Path(os.environ.get("BOW_DIR") or r"C:\AI\Appsgent Bow")
+BOW_DIR = Path(os.environ.get("BOW_DIR") or r"C:\AI\Apps\agent Bow")
+BOW_IDLE_SECS = 120   # AgentBow closes itself after this long unused; restarts on demand
 BOW_EXE = BOW_DIR / "desktop" / "src-tauri" / "target" / "debug" / "bow-desktop.exe"
 
 
@@ -208,7 +209,8 @@ def bow_images_server():
     if not BOW_EXE.is_file():
         return None
     return {"type": "local", "command": ["node", str(ROOT / "addons" / "bow-images.mjs")],
-            "environment": {"BOW_DIR": str(BOW_DIR), "ENGINE_URL": lc_engine.url()}}
+            "environment": {"BOW_DIR": str(BOW_DIR), "ENGINE_URL": lc_engine.url(),
+                            "BOW_IDLE_SECS": str(BOW_IDLE_SECS)}}
 
 
 def opencode_addons(env):

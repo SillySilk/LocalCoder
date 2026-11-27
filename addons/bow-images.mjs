@@ -6,116 +6,208 @@
 // shared Engine Manager engine (BOW_ENGINE_URL) so it never starts a second
 // copy of a model — then runs one download over its WebSocket.
 //
-// AgentBow exits after BOW_IDLE_SECS (default 120) with nothing to do, so it
-// isn't left in memory; the next call starts it again (a few seconds' delay).
+// AgentBow exits after BOW_IDLE_SECS with nothing to do, so it isn't left in
+// memory; the next call starts it again (about 20 seconds).
 //
-// Settings (environment): BOW_DIR (AgentBow folder), ENGINE_URL (shared engine),
-// BOW_IDLE_SECS.
+// Settings (environment, all required): BOW_DIR (AgentBow folder), ENGINE_URL
+// (shared engine), BOW_IDLE_SECS. AgentBow's own desktop\.env supplies its
+// port, workspace and login secret.
 
 import { spawn } from "node:child_process";
-import { readFileSync, existsSync, mkdirSync, copyFileSync, statSync, unlinkSync } from "node:fs";
+import { readFileSync, existsSync, mkdirSync, copyFileSync, statSync, unlinkSync, openSync, closeSync } from "node:fs";
 import { join, basename, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { createInterface } from "node:readline";
 
-const BOW_DIR = process.env.BOW_DIR || "C:\\AI\\Apps\\agent Bow";
-const ENGINE_URL = process.env.ENGINE_URL || "http://127.0.0.1:8090";
-// AgentBow shuts itself down after this many idle seconds (it restarts on the next call).
-const IDLE_SECS = process.env.BOW_IDLE_SECS || "120";
-const EXE = join(BOW_DIR, "desktop", "src-tauri", "target", "debug", "bow-desktop.exe");
+// A missing setting is reported, never guessed.
+function required(value, name) {
+  if (value === undefined || value === "") throw new Error(`bow-images: ${name} is not set`);
+  return value;
+}
 
-function bowEnv() {
+function bowEnv(dir) {
   const env = {};
-  const file = join(BOW_DIR, "desktop", ".env");
-  if (existsSync(file)) {
-    for (const line of readFileSync(file, "utf8").split(/\r?\n/)) {
-      const m = line.match(/^\s*([A-Z_][A-Z0-9_]*)\s*=\s*(.*)\s*$/);
-      if (m) env[m[1]] = m[2].replace(/^"(.*)"$/, "$1").replace(/\\\\/g, "\\");
-    }
+  const file = join(dir, "desktop", ".env");
+  if (!existsSync(file)) throw new Error(`bow-images: AgentBow settings not found (${file})`);
+  for (const line of readFileSync(file, "utf8").split(/\r?\n/)) {
+    const m = line.match(/^\s*([A-Z_][A-Z0-9_]*)\s*=\s*(.*)\s*$/);
+    if (m) env[m[1]] = m[2].replace(/^"(.*)"$/, "$1").replace(/\\\\/g, "\\");
   }
   return env;
 }
 
-const cfg = bowEnv();
-// AgentBow falls back to another port when its usual one is busy; it writes
-// the port it actually got to this file.
+function settings() {
+  const dir = required(process.env.BOW_DIR, "BOW_DIR");
+  const idle = required(process.env.BOW_IDLE_SECS, "BOW_IDLE_SECS");
+  if (!/^[1-9][0-9]*$/.test(idle)) {
+    throw new Error(`bow-images: BOW_IDLE_SECS must be a whole number of seconds above 0, got "${idle}"`);
+  }
+  const env = bowEnv(dir);
+  return {
+    dir,
+    idle,
+    engineUrl: required(process.env.ENGINE_URL, "ENGINE_URL"),
+    exe: join(dir, "desktop", "src-tauri", "target", "debug", "bow-desktop.exe"),
+    port: Number(required(env.BOW_WS_PORT, "BOW_WS_PORT in AgentBow's .env")),
+    workspace: required(env.BOW_WORKSPACE, "BOW_WORKSPACE in AgentBow's .env"),
+    secret: required(env.BOW_SECRET, "BOW_SECRET in AgentBow's .env"),
+  };
+}
+
+// AgentBow writes the port it actually bound here (it moves off its usual port
+// when that is busy) and deletes the file when it exits. Shared by every
+// George window, as is the start-up lock.
 const PORT_FILE = join(tmpdir(), "bow-images.port");
-let port = Number(cfg.BOW_WS_PORT || 9357);
-const WORKSPACE = cfg.BOW_WORKSPACE || "C:\\AI\\workspace";
+const LOCK_FILE = join(tmpdir(), "bow-images.lock");
+const LOCK_STALE_MS = 45_000;
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-async function healthy(p) {
+/** True only if AgentBow itself answers on this port. */
+async function isBow(port) {
   try {
-    const r = await fetch(`http://127.0.0.1:${p}/api/health`, { signal: AbortSignal.timeout(2000) });
-    return r.ok;
-  } catch { return false; }
+    const r = await fetch(`http://127.0.0.1:${port}/api/health`, { signal: AbortSignal.timeout(2000) });
+    return r.ok && r.headers.get("x-app") === "bow";
+  } catch {
+    return false;
+  }
 }
 
-async function bowUp() {
-  const candidates = [port];
-  try { candidates.unshift(Number(readFileSync(PORT_FILE, "utf8").trim())); } catch {}
-  for (const p of candidates) {
-    if (p && await healthy(p)) { port = p; return true; }
-  }
-  return false;
+/** The port of a running AgentBow, or null. */
+async function runningPort(cfg) {
+  let advertised = null;
+  try { advertised = Number(readFileSync(PORT_FILE, "utf8").trim()); } catch {}
+  // No file means an AgentBow started by hand (bow.bat), on its configured port.
+  const port = advertised || cfg.port;
+  return (await isBow(port)) ? port : null;
 }
 
-async function ensureBow() {
-  if (await bowUp()) return;
-  try { unlinkSync(PORT_FILE); } catch {}
-  if (!existsSync(EXE)) throw new Error(`AgentBow is not built yet (${EXE}). Run bow.bat once.`);
-  const child = spawn(EXE, [], {
-    cwd: join(BOW_DIR, "desktop", "src-tauri", "target", "debug"),
-    env: { ...process.env, BOW_ENGINE_URL: ENGINE_URL, BOW_NO_BROWSER: "1", BOW_IDLE_EXIT_SECS: IDLE_SECS, BOW_PORT_FILE: PORT_FILE },
-    detached: true, stdio: "ignore", windowsHide: true,
-  });
-  let spawnError = null;
-  child.on("error", (e) => { spawnError = e; });
-  child.unref();
-  for (let i = 0; i < 60; i++) {
-    await new Promise((r) => setTimeout(r, 500));
-    if (spawnError) throw new Error(`AgentBow could not start: ${spawnError.message}`);
-    if (await bowUp()) return;
+/** Take the start-up lock. Returns false if AgentBow came up while waiting. */
+async function takeLock(cfg) {
+  for (let waited = 0; waited < 60_000; waited += 500) {
+    try {
+      closeSync(openSync(LOCK_FILE, "wx"));
+      return true;
+    } catch (e) {
+      if (e.code !== "EEXIST") throw e;
+    }
+    try {
+      if (Date.now() - statSync(LOCK_FILE).mtimeMs > LOCK_STALE_MS) {
+        unlinkSync(LOCK_FILE); // left by a start-up that crashed
+        continue;
+      }
+    } catch {
+      continue; // released between our two checks
+    }
+    if (await runningPort(cfg)) return false;
+    await sleep(500);
   }
-  throw new Error("AgentBow did not start within 30 seconds.");
+  throw new Error("another window has been starting AgentBow for over a minute");
+}
+
+/** Make sure AgentBow is running; returns its port. Only one caller starts it. */
+async function ensureBow(cfg) {
+  let port = await runningPort(cfg);
+  if (port) return port;
+  if (!(await takeLock(cfg))) {
+    port = await runningPort(cfg);
+    if (port) return port;
+    throw new Error("AgentBow started in another window but stopped answering");
+  }
+  try {
+    port = await runningPort(cfg);
+    if (port) return port;
+    if (!existsSync(cfg.exe)) throw new Error(`AgentBow is not built yet (${cfg.exe}). Run bow.bat once.`);
+    const child = spawn(cfg.exe, [], {
+      cwd: join(cfg.dir, "desktop", "src-tauri", "target", "debug"),
+      env: {
+        ...process.env,
+        BOW_ENGINE_URL: cfg.engineUrl,
+        BOW_NO_BROWSER: "1",
+        BOW_IDLE_EXIT_SECS: cfg.idle,
+        BOW_PORT_FILE: PORT_FILE,
+      },
+      detached: true, stdio: "ignore", windowsHide: true,
+    });
+    let spawnError = null;
+    child.on("error", (e) => { spawnError = e; });
+    child.unref();
+    for (let i = 0; i < 60; i++) {
+      await sleep(500);
+      if (spawnError) throw new Error(`AgentBow could not start: ${spawnError.message}`);
+      port = await runningPort(cfg);
+      if (port) return port;
+    }
+    throw new Error("AgentBow did not start within 30 seconds.");
+  } finally {
+    try { unlinkSync(LOCK_FILE); } catch {}
+  }
 }
 
 function slug(s) {
   return s.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "").slice(0, 60) || "images";
 }
 
-async function download({ query, count = 10, dest_dir, verify = false, min_side = 512, delay_ms = 1500, sources }) {
-  if (!query) throw new Error("query is required");
-  await ensureBow();
-  // AgentBow only writes inside its workspace; download there, then copy out.
-  const staging = join(WORKSPACE, "bow-images", slug(query));
-  mkdirSync(staging, { recursive: true });
+/** AgentBow went away before the download started; safe to retry. */
+class NotConnected extends Error {}
 
-  const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`);
-  const log = [];
-  const result = await new Promise((resolveP, rejectP) => {
-    const timer = setTimeout(() => { ws.close(); rejectP(new Error("download timed out after 20 minutes")); }, 20 * 60 * 1000);
-    ws.onerror = () => { clearTimeout(timer); rejectP(new Error("could not connect to AgentBow")); };
-    ws.onopen = () => ws.send(JSON.stringify({ type: "auth", token: cfg.BOW_SECRET || "", session_id: "bow-images" }));
+/** One download over AgentBow's WebSocket. */
+function scrape(cfg, port, req, log) {
+  return new Promise((resolveP, rejectP) => {
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`);
+    let inside = false;
+    let settled = false;
+    const finish = (fn, v) => {
+      if (!settled) { settled = true; clearTimeout(timer); fn(v); }
+      try { ws.close(); } catch {}
+    };
+    const timer = setTimeout(() => finish(rejectP, new Error("download timed out after 20 minutes")), 20 * 60 * 1000);
+    const lost = (why) =>
+      finish(rejectP, inside ? new Error(`AgentBow ${why} during the download`) : new NotConnected(why));
+    ws.onerror = () => lost("connection failed");
+    ws.onclose = () => lost("closed the connection");
+    ws.onopen = () => ws.send(JSON.stringify({ type: "auth", token: cfg.secret, session_id: "bow-images" }));
     ws.onmessage = (ev) => {
       const m = JSON.parse(ev.data);
       if (m.type === "auth_ok") {
-        ws.send(JSON.stringify({
-          type: "scrape_request", query, count, dest_dir: staging, verify, min_side, delay_ms,
-          dedupe: true, ...(sources ? { sources } : {}),
-        }));
+        inside = true;
+        ws.send(JSON.stringify({ type: "scrape_request", ...req, dedupe: true }));
       } else if (m.type === "auth_error") {
-        clearTimeout(timer); ws.close(); rejectP(new Error("AgentBow rejected the login (BOW_SECRET)"));
+        finish(rejectP, new Error("AgentBow rejected the login (BOW_SECRET)"));
       } else if (m.type === "error") {
-        clearTimeout(timer); ws.close(); rejectP(new Error(m.message || m.code));
+        finish(rejectP, new Error(m.message || m.code));
       } else if (m.type === "scrape_event") {
         if (m.kind === "source") log.push(`${m.source}: ${m.count} found${m.error ? ` (${m.error})` : ""}`);
         if (m.kind === "candidates") log.push(`candidates: ${m.total} (filtered ${m.filtered})`);
         if (m.kind === "failed") log.push(`skipped: ${m.reason}`);
-        if (m.kind === "error") { clearTimeout(timer); ws.close(); rejectP(new Error(m.message)); }
-        if (m.kind === "done") { clearTimeout(timer); ws.close(); resolveP(m); }
+        if (m.kind === "error") finish(rejectP, new Error(m.message));
+        if (m.kind === "done") finish(resolveP, m);
       }
     };
   });
+}
+
+async function download({ query, count = 10, dest_dir, verify = false, min_side = 512, delay_ms = 1500, sources }) {
+  if (!query) throw new Error("query is required");
+  const cfg = settings();
+  // AgentBow only writes inside its workspace; download there, then copy out.
+  const staging = join(cfg.workspace, "bow-images", slug(query));
+  mkdirSync(staging, { recursive: true });
+  const req = { query, count, dest_dir: staging, verify, min_side, delay_ms, ...(sources ? { sources } : {}) };
+
+  const log = [];
+  let result;
+  // Retry once if AgentBow went away between the check and the connection
+  // (it was just closing itself after sitting idle).
+  for (let attempt = 1; ; attempt++) {
+    const port = await ensureBow(cfg);
+    try {
+      result = await scrape(cfg, port, req, log);
+      break;
+    } catch (e) {
+      if (!(e instanceof NotConnected) || attempt === 2) throw e;
+      await sleep(1000);
+    }
+  }
 
   let saved = result.downloaded || [];
   if (dest_dir) {
@@ -167,7 +259,7 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
     reply(id, {
       protocolVersion: params?.protocolVersion || "2024-11-05",
       capabilities: { tools: {} },
-      serverInfo: { name: "bow-images", version: "1.0.0" },
+      serverInfo: { name: "bow-images", version: "1.1.0" },
     });
   } else if (method === "tools/list") {
     reply(id, { tools: TOOLS });

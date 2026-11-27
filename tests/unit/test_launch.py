@@ -92,3 +92,13 @@ def test_enter_picks_the_default_model(monkeypatch):
 def test_small_memory_warns(capsys):
     lc_launch.check_memory(dict(BONSAI, ctx=16384))
     assert "16k memory" in capsys.readouterr().out
+
+
+def test_bow_images_is_on_when_agentbow_is_built():
+    # The real default path, not a stand-in: a typo here silently drops the add-on.
+    if not lc_launch.BOW_EXE.is_file():
+        import pytest
+        pytest.skip("AgentBow is not built on this machine")
+    server = lc_launch.bow_images_server()
+    assert server["environment"]["BOW_IDLE_SECS"] == "120"
+    assert os.path.isfile(server["command"][1])
