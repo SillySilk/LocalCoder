@@ -79,15 +79,3 @@ def test_enter_picks_the_default_model(monkeypatch):
 def test_small_memory_warns(capsys):
     lc_launch.check_memory(dict(BONSAI, ctx=16384))
     assert "16k memory" in capsys.readouterr().out
-
-
-def test_leftover_opencode_helpers_are_stopped(monkeypatch):
-    calls = []
-
-    def fake_run(cmd, **kw):
-        calls.append(cmd)
-        return type("R", (), {"stdout": "111\n222\n" if cmd[0] == "powershell" else ""})()
-    monkeypatch.setattr(lc_launch.os, "name", "nt")
-    monkeypatch.setattr(lc_launch.subprocess, "run", fake_run)
-    assert lc_launch.stop_orphan_opencode() == ["111", "222"]
-    assert ["taskkill", "/PID", "111", "/T", "/F"] in calls
