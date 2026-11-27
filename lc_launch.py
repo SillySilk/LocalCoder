@@ -97,9 +97,29 @@ def on_window_close(model):
     def handler(event):
         if event in (2, 5, 6):  # window closed, log off, shut down
             release_model(model)
+            stop_orphan_opencode()
         return False
     on_window_close.keep = HANDLER(handler)  # must outlive this function
     ctypes.windll.kernel32.SetConsoleCtrlHandler(on_window_close.keep, True)
+
+
+ORPHAN_PS = (
+    "$all = Get-CimInstance Win32_Process; $ids = $all.ProcessId; "
+    "$all | Where-Object { $_.Name -eq 'opencode.exe' -and $_.CommandLine -match ' serve' "
+    "-and $ids -notcontains $_.ParentProcessId } | ForEach-Object { $_.ProcessId }")
+
+
+def stop_orphan_opencode():
+    """Stop OpenCode background helpers whose window is gone. Closing the window
+    leaves them running, and they keep feeding the old chat to the engine."""
+    if os.name != "nt":
+        return []
+    out = subprocess.run(["powershell", "-NoProfile", "-Command", ORPHAN_PS],
+                         capture_output=True, text=True).stdout
+    pids = [p for p in out.split() if p.isdigit()]
+    for pid in pids:
+        subprocess.run(["taskkill", "/PID", pid, "/T", "/F"], capture_output=True)
+    return pids
 
 
 # ---------- relay ----------
@@ -336,6 +356,8 @@ def main():
         pass
     finally:
         release_model(f["name"])
+        if tool == "opencode":
+            stop_orphan_opencode()
     sys.exit(code)
 
 
