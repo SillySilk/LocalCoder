@@ -227,15 +227,18 @@ def opencode_addons(env):
     return cfg, warnings
 
 
-def opencode_config(model, addons=None):
-    """OpenCode settings that point it at the engine's OpenAI-style endpoint."""
+def opencode_config(model, ctx, addons=None):
+    """OpenCode settings that point it at the engine's OpenAI-style endpoint.
+    The limit lets OpenCode show the real fill level and shrink the chat before
+    the engine runs out of room."""
     return json.dumps({
         "$schema": "https://opencode.ai/config.json",
         "provider": {"engine": {
             "npm": "@ai-sdk/openai-compatible",
             "name": "Local engine",
             "options": {"baseURL": lc_engine.url("/v1"), "apiKey": "local"},
-            "models": {model: {"name": model, "tools": True}},
+            "models": {model: {"name": model, "tools": True,
+                               "limit": {"context": ctx, "output": min(8192, ctx // 8)}}},
         }},
         "model": f"engine/{model}",
         **(addons or {}),
@@ -266,7 +269,7 @@ def build_command(tool, f, folder, passthrough, env):
     addons, warnings = opencode_addons(env)
     for w in warnings:
         print(f"Note: {w}")
-    env["OPENCODE_CONFIG_CONTENT"] = opencode_config(name, addons)
+    env["OPENCODE_CONFIG_CONTENT"] = opencode_config(name, f["ctx"], addons)
     return [exe, str(folder)] + passthrough
 
 

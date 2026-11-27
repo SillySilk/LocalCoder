@@ -35,6 +35,13 @@ def test_opencode_gets_a_config_for_the_engine(tmp_path):
     assert "Bonsai-PTQ1_0" in prov["models"]
 
 
+def test_opencode_knows_the_real_memory_size(tmp_path):
+    env = {}
+    lc_launch.build_command("opencode", BONSAI, tmp_path, [], env)
+    model = json.loads(env["OPENCODE_CONFIG_CONTENT"])["provider"]["engine"]["models"]["Bonsai-PTQ1_0"]
+    assert model["limit"] == {"context": 65536, "output": 8192}
+
+
 def test_opencode_addons_with_everything_available(tmp_path, monkeypatch):
     root = tmp_path / "forge"
     (root / "venv" / "Scripts").mkdir(parents=True)
