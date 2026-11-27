@@ -35,6 +35,34 @@ def test_opencode_gets_a_config_for_the_engine(tmp_path):
     assert "Bonsai-PTQ1_0" in prov["models"]
 
 
+def test_opencode_addons_with_everything_available(tmp_path, monkeypatch):
+    root = tmp_path / "forge"
+    (root / "venv" / "Scripts").mkdir(parents=True)
+    (root / "venv" / "Scripts" / "python.exe").write_text("")
+    plugin = tmp_path / "plugin"
+    (plugin / "0.1.0" / "server").mkdir(parents=True)
+    (plugin / "0.1.0" / "server" / "forge_mcp.py").write_text("")
+    monkeypatch.setattr(lc_launch, "FORGE_PLUGIN", plugin)
+    monkeypatch.setattr(lc_launch.shutil, "which", lambda _: "gh")
+    monkeypatch.setattr(lc_launch.subprocess, "run",
+                        lambda *a, **k: type("R", (), {"stdout": "tok\n"})())
+    env = {"FIRECRAWL_API_KEY": "fc", "FORGE_NEO_ROOT": str(root)}
+    cfg, warnings = lc_launch.opencode_addons(env)
+    assert warnings == []
+    assert cfg["websearch"] == {"provider": "firecrawl"}
+    assert set(cfg["mcp"]["servers"]) == {"playwright", "github", "forge-neo"}
+    assert env["GITHUB_TOKEN"] == "tok"
+
+
+def test_opencode_addons_warn_when_missing(monkeypatch, tmp_path):
+    monkeypatch.setattr(lc_launch, "FORGE_PLUGIN", tmp_path)
+    monkeypatch.setattr(lc_launch.shutil, "which", lambda _: None)
+    cfg, warnings = lc_launch.opencode_addons({})
+    assert "websearch" not in cfg
+    assert set(cfg["mcp"]["servers"]) == {"playwright"}
+    assert len(warnings) == 3
+
+
 def test_enter_picks_the_default_model(monkeypatch):
     other = dict(BONSAI, name="Other", default=False)
     monkeypatch.setattr("builtins.input", lambda *_: "")

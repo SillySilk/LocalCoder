@@ -182,7 +182,52 @@ def check_memory(f):
               f"just to start. Raise it in Engine Manager (Memory column).")
 
 
-def opencode_config(model):
+FORGE_PLUGIN = Path.home() / ".claude" / "plugins" / "cache" / "forge-neo" / "forge-neo"
+
+
+def forge_server(env):
+    """The Forge Neo image add-on, from the Claude Code plugin install. None if missing."""
+    root = env.get("FORGE_NEO_ROOT")
+    scripts = sorted(FORGE_PLUGIN.glob("*/server/forge_mcp.py"))
+    if not root or not scripts:
+        return None
+    python = Path(root) / "venv" / "Scripts" / "python.exe"
+    if not python.is_file():
+        return None
+    return {"type": "local", "command": [str(python), str(scripts[-1])],
+            "environment": {"FORGE_NEO_ROOT": root}}
+
+
+def opencode_addons(env):
+    """Add-ons for OpenCode: web search, browser, GitHub, images.
+    Returns (config pieces, list of warnings for add-ons that can't start)."""
+    warnings = []
+    servers = {"playwright": {"type": "local", "command": ["npx", "-y", "@playwright/mcp@latest"]}}
+    cfg = {"mcp": {"servers": servers}}
+
+    if env.get("FIRECRAWL_API_KEY"):
+        cfg["websearch"] = {"provider": "firecrawl"}
+    else:
+        warnings.append("Web search is off: FIRECRAWL_API_KEY is not set.")
+
+    gh = shutil.which("gh")
+    token = subprocess.run([gh, "auth", "token"], capture_output=True, text=True).stdout.strip() if gh else ""
+    if token:
+        env["GITHUB_TOKEN"] = token
+        servers["github"] = {"type": "remote", "url": "https://api.githubcopilot.com/mcp/", "oauth": False,
+                             "headers": {"Authorization": "Bearer {env:GITHUB_TOKEN}"}}
+    else:
+        warnings.append("GitHub add-on is off: sign in with 'gh auth login'.")
+
+    forge = forge_server(env)
+    if forge:
+        servers["forge-neo"] = forge
+    else:
+        warnings.append("Image add-on is off: Forge Neo not found (FORGE_NEO_ROOT or the Claude plugin).")
+    return cfg, warnings
+
+
+def opencode_config(model, addons=None):
     """OpenCode settings that point it at the engine's OpenAI-style endpoint."""
     return json.dumps({
         "$schema": "https://opencode.ai/config.json",
@@ -193,6 +238,7 @@ def opencode_config(model):
             "models": {model: {"name": model, "tools": True}},
         }},
         "model": f"engine/{model}",
+        **(addons or {}),
     })
 
 
@@ -217,7 +263,10 @@ def build_command(tool, f, folder, passthrough, env):
         env["CLAUDE_CODE_MAX_OUTPUT_TOKENS"] = str(min(8192, f["ctx"] // 8))
         return [exe, "--model", name, "--settings", str(ROOT / "claude-settings.json")] + passthrough
     exe = shutil.which("opencode") or "opencode"
-    env["OPENCODE_CONFIG_CONTENT"] = opencode_config(name)
+    addons, warnings = opencode_addons(env)
+    for w in warnings:
+        print(f"Note: {w}")
+    env["OPENCODE_CONFIG_CONTENT"] = opencode_config(name, addons)
     return [exe, str(folder)] + passthrough
 
 
