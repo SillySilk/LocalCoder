@@ -207,8 +207,10 @@ def opencode_addons(env):
 
     if env.get("FIRECRAWL_API_KEY"):
         cfg["websearch"] = {"provider": "firecrawl"}
+        # Page reading that gets past sites which block plain requests.
+        servers["firecrawl"] = {"type": "local", "command": ["npx", "-y", "firecrawl-mcp"]}
     else:
-        warnings.append("Web search is off: FIRECRAWL_API_KEY is not set.")
+        warnings.append("Firecrawl search and page reading are off: FIRECRAWL_API_KEY is not set.")
 
     gh = shutil.which("gh")
     token = subprocess.run([gh, "auth", "token"], capture_output=True, text=True).stdout.strip() if gh else ""

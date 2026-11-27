@@ -66,7 +66,7 @@ def test_opencode_addons_with_everything_available(tmp_path, monkeypatch):
     cfg, warnings = lc_launch.opencode_addons(env)
     assert warnings == []
     assert cfg["websearch"] == {"provider": "firecrawl"}
-    assert set(cfg["mcp"]["servers"]) == {"playwright", "github", "forge-neo"}
+    assert set(cfg["mcp"]["servers"]) == {"playwright", "github", "forge-neo", "firecrawl"}
     assert env["GITHUB_TOKEN"] == "tok"
 
 

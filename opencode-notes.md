@@ -14,4 +14,7 @@
 - Wikimedia: get file URLs from the API
   (`https://commons.wikimedia.org/w/api.php?action=query&prop=imageinfo&iiprop=url&format=json&titles=File:NAME`),
   then download them one at a time, a few seconds apart.
+- If webfetch gets 403/blocked or an empty page, read it with the firecrawl scrape tool instead.
+- After downloading, check each file is really an image (size, and not starting with `<!DOCTYPE`/`<html`);
+  an error page saved under a .jpg name is a failed download.
 - If the same approach has failed twice, stop and try a different approach rather than a variation of it.
