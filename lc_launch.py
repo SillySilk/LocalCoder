@@ -241,6 +241,8 @@ def opencode_config(model, ctx, addons=None):
                                "limit": {"context": ctx, "output": min(8192, ctx // 8)}}},
         }},
         "model": f"engine/{model}",
+        # Standing notes on this computer's shell and on downloading politely.
+        "instructions": [str(ROOT / "opencode-notes.md")],
         **(addons or {}),
     })
 

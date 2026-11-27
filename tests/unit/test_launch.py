@@ -1,3 +1,4 @@
+import os
 import json
 
 import lc_launch
@@ -41,6 +42,13 @@ def test_opencode_knows_the_real_memory_size(tmp_path):
     lc_launch.build_command("opencode", BONSAI, tmp_path, [], env)
     model = json.loads(env["OPENCODE_CONFIG_CONTENT"])["provider"]["engine"]["models"]["Bonsai-PTQ1_0"]
     assert model["limit"] == {"context": 65536, "output": 8192}
+
+
+def test_opencode_gets_the_standing_notes(tmp_path):
+    env = {}
+    lc_launch.build_command("opencode", BONSAI, tmp_path, [], env)
+    notes = json.loads(env["OPENCODE_CONFIG_CONTENT"])["instructions"]
+    assert notes and all(os.path.isfile(n) for n in notes)
 
 
 def test_opencode_addons_with_everything_available(tmp_path, monkeypatch):
