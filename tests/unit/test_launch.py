@@ -59,6 +59,9 @@ def test_opencode_addons_with_everything_available(tmp_path, monkeypatch):
     (plugin / "0.1.0" / "server").mkdir(parents=True)
     (plugin / "0.1.0" / "server" / "forge_mcp.py").write_text("")
     monkeypatch.setattr(lc_launch, "FORGE_PLUGIN", plugin)
+    bow = tmp_path / "bow-desktop.exe"
+    bow.write_text("")
+    monkeypatch.setattr(lc_launch, "BOW_EXE", bow)
     monkeypatch.setattr(lc_launch.shutil, "which", lambda _: "gh")
     monkeypatch.setattr(lc_launch.subprocess, "run",
                         lambda *a, **k: type("R", (), {"stdout": "tok\n"})())
@@ -66,17 +69,18 @@ def test_opencode_addons_with_everything_available(tmp_path, monkeypatch):
     cfg, warnings = lc_launch.opencode_addons(env)
     assert warnings == []
     assert cfg["websearch"] == {"provider": "firecrawl"}
-    assert set(cfg["mcp"]["servers"]) == {"playwright", "github", "forge-neo", "firecrawl"}
+    assert set(cfg["mcp"]["servers"]) == {"playwright", "github", "forge-neo", "firecrawl", "bow-images"}
     assert env["GITHUB_TOKEN"] == "tok"
 
 
 def test_opencode_addons_warn_when_missing(monkeypatch, tmp_path):
     monkeypatch.setattr(lc_launch, "FORGE_PLUGIN", tmp_path)
+    monkeypatch.setattr(lc_launch, "BOW_EXE", tmp_path / "missing.exe")
     monkeypatch.setattr(lc_launch.shutil, "which", lambda _: None)
     cfg, warnings = lc_launch.opencode_addons({})
     assert "websearch" not in cfg
     assert set(cfg["mcp"]["servers"]) == {"playwright"}
-    assert len(warnings) == 3
+    assert len(warnings) == 4
 
 
 def test_enter_picks_the_default_model(monkeypatch):

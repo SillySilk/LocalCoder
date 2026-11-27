@@ -198,6 +198,19 @@ def forge_server(env):
             "environment": {"FORGE_NEO_ROOT": root}}
 
 
+BOW_DIR = Path(os.environ.get("BOW_DIR") or r"C:\AI\Appsgent Bow")
+BOW_EXE = BOW_DIR / "desktop" / "src-tauri" / "target" / "debug" / "bow-desktop.exe"
+
+
+def bow_images_server():
+    """AgentBow's image downloader as an add-on. It runs AgentBow on the shared
+    engine, so it never starts a second copy of a model."""
+    if not BOW_EXE.is_file():
+        return None
+    return {"type": "local", "command": ["node", str(ROOT / "addons" / "bow-images.mjs")],
+            "environment": {"BOW_DIR": str(BOW_DIR), "ENGINE_URL": lc_engine.url()}}
+
+
 def opencode_addons(env):
     """Add-ons for OpenCode: web search, browser, GitHub, images.
     Returns (config pieces, list of warnings for add-ons that can't start)."""
@@ -220,6 +233,12 @@ def opencode_addons(env):
                              "headers": {"Authorization": "Bearer {env:GITHUB_TOKEN}"}}
     else:
         warnings.append("GitHub add-on is off: sign in with 'gh auth login'.")
+
+    bow = bow_images_server()
+    if bow:
+        servers["bow-images"] = bow
+    else:
+        warnings.append(f"Image download add-on is off: AgentBow is not built ({BOW_EXE}).")
 
     forge = forge_server(env)
     if forge:
