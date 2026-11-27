@@ -15,6 +15,8 @@ def test_claude_points_every_model_slot_at_the_engine_through_the_relay(tmp_path
     # any key here would switch off the claude.ai sign-in and its connectors
     assert "ANTHROPIC_API_KEY" not in env
     assert "ANTHROPIC_AUTH_TOKEN" not in env
+    # the local relay can't do server-side auto-mode checks
+    assert env["CLAUDE_CODE_AUTO_MODE_SERVER"] == "0"
     for k in ("OPUS", "SONNET", "HAIKU", "FABLE"):
         assert env[f"ANTHROPIC_DEFAULT_{k}_MODEL"] == "Bonsai-PTQ1_0"
     assert env["CLAUDE_CODE_SUBAGENT_MODEL"] == "Bonsai-PTQ1_0"

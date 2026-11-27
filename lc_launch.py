@@ -206,6 +206,9 @@ def build_command(tool, f, folder, passthrough, env):
         # which switches off the claude.ai connectors. The relay ignores auth.
         env.pop("ANTHROPIC_AUTH_TOKEN", None)
         env.pop("ANTHROPIC_API_KEY", None)
+        # The local relay can't run Anthropic's server-side auto-mode checks;
+        # keep auto mode's checks in Claude Code (they go to the local model).
+        env["CLAUDE_CODE_AUTO_MODE_SERVER"] = "0"
         env["ANTHROPIC_MODEL"] = name
         for k in ("OPUS", "SONNET", "HAIKU", "FABLE"):
             env[f"ANTHROPIC_DEFAULT_{k}_MODEL"] = name
