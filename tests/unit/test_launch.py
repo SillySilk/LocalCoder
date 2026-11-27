@@ -7,12 +7,14 @@ BONSAI = {"name": "Bonsai-PTQ1_0", "size": 6 * 10**9, "ctx": 65536, "vision": Tr
 
 
 def test_claude_points_every_model_slot_at_the_engine_through_the_relay(tmp_path):
-    env = {}
+    env = {"ANTHROPIC_API_KEY": "x", "ANTHROPIC_AUTH_TOKEN": "y"}
     cmd = lc_launch.build_command("claude", BONSAI, tmp_path, ["--resume"], env)
     assert cmd[1:3] == ["--model", "Bonsai-PTQ1_0"]
     assert cmd[-1] == "--resume"
     assert env["ANTHROPIC_BASE_URL"] == f"http://127.0.0.1:{lc_launch.RELAY_PORT}"
-    assert env["ANTHROPIC_API_KEY"] == ""
+    # any key here would switch off the claude.ai sign-in and its connectors
+    assert "ANTHROPIC_API_KEY" not in env
+    assert "ANTHROPIC_AUTH_TOKEN" not in env
     for k in ("OPUS", "SONNET", "HAIKU", "FABLE"):
         assert env[f"ANTHROPIC_DEFAULT_{k}_MODEL"] == "Bonsai-PTQ1_0"
     assert env["CLAUDE_CODE_SUBAGENT_MODEL"] == "Bonsai-PTQ1_0"

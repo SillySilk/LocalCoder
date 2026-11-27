@@ -202,8 +202,10 @@ def build_command(tool, f, folder, passthrough, env):
     if tool == "claude":
         exe = shutil.which("claude") or "claude"
         env["ANTHROPIC_BASE_URL"] = f"http://127.0.0.1:{RELAY_PORT}"
-        env["ANTHROPIC_AUTH_TOKEN"] = "local"
-        env["ANTHROPIC_API_KEY"] = ""
+        # No key here: any key makes Claude Code skip the claude.ai sign-in,
+        # which switches off the claude.ai connectors. The relay ignores auth.
+        env.pop("ANTHROPIC_AUTH_TOKEN", None)
+        env.pop("ANTHROPIC_API_KEY", None)
         env["ANTHROPIC_MODEL"] = name
         for k in ("OPUS", "SONNET", "HAIKU", "FABLE"):
             env[f"ANTHROPIC_DEFAULT_{k}_MODEL"] = name
