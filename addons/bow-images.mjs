@@ -1,6 +1,6 @@
 // bow-images: an MCP add-on that hands image downloading to AgentBow.
 //
-// AgentBow searches six image engines at once, skips small images and error
+// AgentBow searches four image engines at once, skips small images and error
 // pages, removes duplicates and can have a vision model check each picture.
 // This add-on starts AgentBow when needed — headless, and pointed at the
 // shared Engine Manager engine (BOW_ENGINE_URL) so it never starts a second
@@ -200,6 +200,14 @@ async function download({ query, count = 10, dest_dir, verify = false, min_side 
   // AgentBow only writes inside its workspace; download there, then copy out.
   const staging = join(cfg.workspace, "bow-images", slug(query));
   mkdirSync(staging, { recursive: true });
+  if (sources) {
+    // AgentBow ignores names it doesn't know, which silently narrows the search
+    // (a model asking for "duckduckgo" got Bing alone). Refuse them instead.
+    const unknown = sources.filter((s) => !ENGINES.includes(String(s).toLowerCase()));
+    if (unknown.length) {
+      throw new Error(`unknown engine ${unknown.join(", ")}; use any of ${ENGINES.join(", ")}, or leave sources out to use all`);
+    }
+  }
   const req = { query, count, dest_dir: staging, verify, min_side, delay_ms, ...(sources ? { sources } : {}) };
 
   const log = [];
@@ -234,13 +242,19 @@ async function download({ query, count = 10, dest_dir, verify = false, min_side 
   ].join("\n");
 }
 
+// AgentBow's names for the engines its downloader runs.
+const ENGINES = ["yandex", "bing", "brave", "ddg"];
+
 const TOOLS = [{
   name: "image_download",
   description:
-    "Find and download images of a subject from six image search engines (Bing, DuckDuckGo, Yandex, Brave, Qwant, SearXNG). " +
+    "Find and download images of a subject from four image search engines at once (Yandex, Bing, Brave, DuckDuckGo). " +
+    "Leave `sources` out: each engine fails on different names (Bing reads \"Reed\" as \"red\"), and all four together " +
+    "cover for each other. " +
     "Skips small images, error pages and duplicates. Use this instead of hand-written download scripts when you need " +
     "N pictures of a person, character, object or style. Call once per subject. Set verify=true to have the vision " +
-    "model reject pictures that don't match (slower; needs a vision model loaded).",
+    "model reject pictures that don't match (slower; needs a vision model loaded). Searches are unfiltered, so a bare " +
+    "name can match unrelated adult or off-topic pages; use verify=true when only the subject should appear.",
   inputSchema: {
     type: "object",
     properties: {
@@ -250,7 +264,8 @@ const TOOLS = [{
       verify: { type: "boolean", default: false },
       min_side: { type: "integer", default: 512, description: "Skip images whose shorter side is below this (pixels)" },
       delay_ms: { type: "integer", default: 1500, description: "Pause between downloads" },
-      sources: { type: "array", items: { type: "string" }, description: "Limit to these engines, e.g. [\"bing\",\"duckduckgo\"]" },
+      sources: { type: "array", items: { type: "string", enum: ["yandex", "bing", "brave", "ddg"] },
+                 description: "Only to rule an engine out; normally leave this out and all four are used" },
     },
     required: ["query"],
   },

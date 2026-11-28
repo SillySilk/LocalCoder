@@ -7,7 +7,7 @@
 
 ## Downloading from websites
 - To collect pictures of a person, character, object or style, use the bow-images `image_download` tool
-  (one call per subject) rather than hand-written download scripts. It searches six image engines and skips
+  (one call per subject) rather than hand-written download scripts. It searches four image engines and skips
   small images, error pages and duplicates. Use `verify: true` when only that one subject should appear.
 - Identify yourself honestly with a descriptive User-Agent, e.g.
   `curl.exe -L -A "GeorgeDownloader/1.0 (personal project)" -o out.jpg URL`.
