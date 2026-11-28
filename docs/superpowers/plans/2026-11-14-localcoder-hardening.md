@@ -26,7 +26,9 @@
 2. **Conversation grows past the model's context** → Claude Code compacts before Ollama truncates; Ollama's log never shows `truncated = 1`. (Task 5.)
 3. **Two models or two agents share a 16 GB card** → a subagent call finishes (possibly slower), it does not crash or deadlock. (Task 6.)
 4. **Low-bit quant writes a tool call as plain text** → the relay turns a recognised pattern into a real tool call; anything unrecognised passes through unchanged. (Task 7 tests both.)
-5. **Fresh clone on a machine without this user's plugins/paths** → `--check` passes and one practice task runs from the clone. (Task 3.)
+5. **No Claude subscription / login** → LocalCoder still runs and compaction is done by the local model. (Tasks 3 and 5.)
+7. **A tool updates itself past the tested version** → `--check` says so plainly; nothing fails silently. (Task 9.)
+6. **Fresh clone on a machine without this user's plugins/paths** → `--check` passes and one practice task runs from the clone. (Task 3.)
 
 ---
 
@@ -68,7 +70,7 @@
 
 **Files:** Create `tests/fresh_clone_check.py`.
 
-- [ ] **Step 1:** Script clones `https://github.com/SillySilk/LocalCoder` into a temp folder, runs `python lc_launch.py --check` and `python tests/run_tests.py <model> --tools claude --tasks 1-explain` from the clone, with `USERPROFILE`/`HOME` untouched but `PATH` unchanged; asserts both exit 0 and `git status` in the clone is clean afterwards.
+- [ ] **Step 1:** Script clones `https://github.com/SillySilk/LocalCoder` into a temp folder, runs `python lc_launch.py --check` and `python tests/run_tests.py <model> --tools claude --tasks 1-explain` from the clone, with `USERPROFILE`/`HOME` untouched but `PATH` unchanged; asserts both exit 0 and `git status` in the clone is clean afterwards. Run Claude Code with `CLAUDE_CONFIG_DIR` set to a new empty temp folder (no saved Claude login, no user plugins) so the check proves LocalCoder needs no Anthropic account.
 - [ ] **Step 2:** Run it → PASS (fix anything that depended on `C:\AI\LocalCoder`).
 - [ ] **Step 3:** Commit `Add fresh-clone check`.
 
@@ -85,7 +87,7 @@
 
 **Files:** Create `tests/long_session.py`; possibly Modify `lc_launch.py` env.
 
-- [ ] **Step 1:** Script generates a practice copy with ~12 extra 4k-token source files, asks Claude Code (via `lc_launch --yes`, `--output-format stream-json --verbose`) to read every file and write a one-line summary of each into `SUMMARY.md`. Pass = stream contains a `compact_boundary` system event **and** the Ollama `server.log` lines written during the run contain no `truncated = 1` and no `task.n_tokens` above the model's num_ctx, **and** `SUMMARY.md` has one line per file.
+- [ ] **Step 1:** Script generates a practice copy with ~12 extra 4k-token source files, asks Claude Code (via `lc_launch --yes`, `--output-format stream-json --verbose`) to read every file and write a one-line summary of each into `SUMMARY.md`. Pass = stream contains a `compact_boundary` system event **and** the Ollama `server.log` lines written during the run contain no `truncated = 1` and no `task.n_tokens` above the model's num_ctx, **and** `SUMMARY.md` has one line per file, **and** the relay's `LC_RELAY_LOG` shows the compaction (summary) request went to Ollama. While it runs, record outbound connections of the `claude` process (`Get-NetTCPConnection -OwningProcess`); none may go to Anthropic API hosts other than optional telemetry, which is listed if seen.
 - [ ] **Step 2:** Run on `qwen3-coder-uncensored-64k`. If compaction never fires or truncation appears, set `CLAUDE_CODE_AUTO_COMPACT_WINDOW=<num_ctx>` (and, if needed, `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE`) in `lc_launch.main()`, rerun until PASS.
 - [ ] **Step 3:** Commit `Verify compaction before Ollama truncates` (with whichever env change was needed and the measured numbers in the body).
 
@@ -121,7 +123,22 @@ Gate: start only after `tests/COMPAT.md` exists; add one test per failure patter
 - [ ] **Step 4:** Test PASS; on this PC `qwen3-coder-uncensored-64k` shows the warning (it's ~60% on GPU).
 - [ ] **Step 5:** Commit `Warn when a model doesn't fit on the graphics card`.
 
-### Task 9: Hand-off
+### Task 9: Update check and `--update`
+
+Why: Claude Code, OpenCode and Ollama change often, and any update can break the parts LocalCoder relies on (the relay exists because of one such behaviour). Users need to know (a) an update is available and (b) whether their versions are newer than the ones LocalCoder was last tested with.
+
+**Files:** Create `lc_update.py`, `tested-versions.json`; Modify `lc_launch.py` (`--check` rows, `--update` flag), `tests/compat_matrix.py` and `tests/fresh_clone_check.py` (write `tested-versions.json` after a passing run); Test `tests/test_update.py`.
+
+**Interfaces:**
+- Produces: `lc_update.installed() -> dict[str, str | None]` (keys `claude`, `opencode`, `ollama`, `localcoder` = short git commit or None), `lc_update.latest(fetch=urllib-based) -> dict[str, str | None]` (Claude Code from `https://registry.npmjs.org/@anthropic-ai/claude-code/latest`, OpenCode from `https://registry.npmjs.org/opencode-ai/latest`, Ollama from `https://api.github.com/repos/ollama/ollama/releases/latest` `tag_name` minus `v`, LocalCoder from `git ls-remote origin HEAD`; any network error → None), `lc_update.rows(installed, latest, tested) -> list[(name, status, detail)]`, `lc_update.run_updates() -> list[(name, ok, detail)]`.
+- `tested-versions.json`: `{"claude": "2.1.325", "opencode": "1.19.5", "ollama": "0.40.16", "date": "2026-11-14"}`.
+
+- [ ] **Step 1: Failing tests** (`tests/test_update.py`, fetch injected, no network): `test_update_available_is_a_note` (installed 2.1.300, latest 2.1.325 → status warn, detail "2.1.300 → 2.1.325"); `test_up_to_date_is_ok`; `test_newer_than_tested_is_a_note` (installed 2.1.400, tested 2.1.325 → warn mentioning "not yet tested with LocalCoder"); `test_offline_is_not_a_failure` (latest all None → status ok/warn, never fail, detail "couldn't check"); `test_version_compare_handles_v_prefix_and_suffixes` ("v0.40.16" == "0.40.16", "2.1.325 (Claude Code)" parses).
+- [ ] **Step 2:** Run → FAIL. **Step 3:** Implement; `--check` appends `lc_update.rows(...)`; `--update` runs `claude update`, `opencode upgrade`, `git pull --ff-only` in the LocalCoder folder (only if it is a git clone with no local changes), and for Ollama on Windows downloads `OllamaSetup.exe` from the release asset and runs it with `/VERYSILENT /NORESTART /SUPPRESSMSGBOXES` (other systems: print the official install command instead). Afterwards it runs `--check` and offers a one-task smoke test (`tests/run_tests.py <model> --tools claude --tasks 1-explain`).
+- [ ] **Step 4:** Tests PASS; `python lc_launch.py --check` on this PC shows the version rows; `python lc_launch.py --update` reports everything already up to date.
+- [ ] **Step 5:** README "Updating" section (Claude Code also updates itself; the note tells you when you're past the tested versions). Commit `Add update check and --update`.
+
+### Task 10: Hand-off
 
 - [ ] README: update Requirements, Known issues, Compatibility (summary of `tests/COMPAT.md`), relay description. Commit + push.
 - [ ] Ask the user for the 2-minute interactive check: run `george` in a scratch folder, pick a model, ask it to create and edit a file, approve one permission prompt, exit. Record the outcome in README Known issues if anything is off.

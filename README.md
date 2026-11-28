@@ -25,7 +25,7 @@ Models are managed in **Engine Manager**: `ModelManager.bat` (or the `models` co
 - A model that can use tools, with at least 32k of memory; 64k is better (see below).
 
 ## The relay
-- **Relay (`lc_proxy.py`).** Claude Code sends the skill list, the names of extra tools and plugin start-up notes as "system" messages in the middle of the conversation. Most models' chat formats reject those ("System message must be at the beginning"). The launcher starts a small relay on port 11435 that turns them into normal text the model can read. It runs in a minimised "LocalCoder relay" window and can be left open. It keeps a short log in `logs\relay.log`. Set `LC_RELAY_LOG` to a file path to also record everything that passes through it (large).
+- **Relay (`lc_proxy.py`).** Claude Code sends the skill list, the names of extra tools and plugin start-up notes as "system" messages in the middle of the conversation. Most models' chat formats reject those ("System message must be at the beginning"). The launcher starts a small relay that turns them into normal text the model can read. Each session gets its own relay on a free port, with no window; it closes by itself when the session ends, and is restarted if it crashes mid-session. It keeps a short log in `logs\relay.log`. Set `LC_RELAY_LOG` to a file path to also record everything that passes through it (large).
 - **Trimmed plugin list (`claude-settings.json`).** Every plugin adds text the model must read before each task. This file (LocalCoder only) switches off heavy plugins. In testing, trimming cut start-up from ~29k to ~22.7k tokens.
 - **claude.ai connectors** (Gmail, Drive, Calendar…) don't work here.
 
@@ -39,6 +39,16 @@ Models are managed in **Engine Manager**: `ModelManager.bat` (or the `models` co
 - `python -m pytest tests/unit`: quick checks; never loads a model.
 - `python tests\run_tests.py <model> [--tools claude,opencode]` runs 4 small coding tasks on a real model. Results go to `tests\RESULTS.md`. Uses graphics memory.
 - `python tests\measure_startup.py <model> [--lean]` shows how many tokens Claude Code uses before doing any work.
+- `python tests\fresh_clone_check.py [--model NAME | --no-model]` clones the repo to a temp folder and runs `--check` and one practice task from the clone with an empty Claude config, proving George needs no Claude login or anything outside the repo. After a pass it records the tool versions in `tested-versions.json`.
+
+## Check your setup
+`python lc_launch.py --check` (or `george --check`) reports the engine, Claude Code, OpenCode, the relay, every model's memory size, and available updates. "note" lines are fine; only "FAIL" means something is broken.
+
+## Updating
+Claude Code and OpenCode change often, and an update can change something George depends on.
+- `--check` tells you when an update is available, and when what you have is newer than the versions George was last tested with (`tested-versions.json`).
+- `python lc_launch.py --update` (or `george --update`) runs `claude update` and `opencode upgrade`, pulls the latest George if this is an unmodified git clone, then runs `--check`.
+- The engine and models are updated from Engine Manager, not here.
 
 ## Known issues
 - The first reply of a session is slow (~30 s for Bonsai) while the model reads Claude Code's start-up text; later replies reuse it.

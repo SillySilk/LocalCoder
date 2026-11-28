@@ -4,6 +4,8 @@ then start Claude Code or OpenCode on it.
 Usage:
     python lc_launch.py [project_folder] [--model NAME] [--tool claude|opencode]
                         [--yes] [-- extra args for the tool]
+    python lc_launch.py --check     check the setup and exit
+    python lc_launch.py --update    update Claude Code, OpenCode and LocalCoder, then check
 
 The model list, memory sizes and the default model come from Engine Manager.
 Enter at the model prompt picks the default model.
@@ -18,14 +20,13 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.request
 from pathlib import Path
 
 import lc_engine
 
 ROOT = Path(__file__).resolve().parent
-RELAY_PORT = 11435
 MIN_CTX = 32768        # Claude Code needs ~23k just to start a task
-started_relays = []    # relay processes this launcher started
 SESSIONS = ROOT / "logs" / "sessions"   # one file per open George window: the model it uses
 
 
@@ -104,53 +105,101 @@ def on_window_close(model):
 
 # ---------- relay ----------
 
-def relay_up(port=RELAY_PORT):
-    """True if something is accepting connections on the relay port."""
-    try:
-        socket.create_connection(("127.0.0.1", port), timeout=2).close()
-        return True
-    except OSError:
-        return False
+def relay_popen_kwargs(platform=sys.platform):
+    """Background helper processes: no console window on Windows."""
+    if platform == "win32":
+        return {"creationflags": 0x08000000}  # CREATE_NO_WINDOW
+    return {}
 
 
-def start_relay(port=RELAY_PORT, upstream=None):
-    flags = getattr(subprocess, "CREATE_NEW_CONSOLE", 0)
-    kw = {"creationflags": flags} if flags else {}
-    if flags:
-        si = subprocess.STARTUPINFO()
-        si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-        si.wShowWindow = 7  # minimised, not focused
-        kw["startupinfo"] = si
-    args = [sys.executable, str(ROOT / "lc_proxy.py"), str(port)] + ([upstream] if upstream else [])
-    proc = subprocess.Popen(args, **kw)
-    started_relays.append(proc)
-    return proc
+def start_relay(upstream, port=0):
+    """Start this session's relay; returns (process, port).
+
+    Port 0 lets the relay pick a free port and report it, so windows never
+    clash and nothing else on a fixed port can block George. The relay exits by
+    itself once this launcher is gone, even if its window is closed.
+    """
+    cmd = [sys.executable, str(ROOT / "lc_proxy.py"), str(port), upstream, "--parent", str(os.getpid())]
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True,
+                            **relay_popen_kwargs())
+    line = proc.stdout.readline().split()
+    if len(line) != 2 or line[0] != "PORT":
+        proc.kill()
+        raise OSError("the relay did not start")
+    return proc, int(line[1])
 
 
-def ensure_relay(port=RELAY_PORT, upstream=None):
-    """Start the relay if it isn't running. Returns False if it won't come up."""
-    if relay_up(port):
-        return True
-    start_relay(port, upstream)
-    for _ in range(30):
-        time.sleep(0.5)
-        if relay_up(port):
-            return True
-    return False
-
-
-def watch_relay(port=RELAY_PORT, every=2.0, upstream=None):
-    """Restart the relay whenever it stops (window closed, crash) while the
-    tool is running, so Claude Code's retries reconnect instead of failing.
-    Set the returned event to stop watching."""
+def keep_relay_running(proc, port, upstream, every=2.0):
+    """Restart this session's relay on the same port if it stops (a crash), so
+    Claude Code's retries reconnect instead of failing. Returns (stop event,
+    list holding the current process)."""
+    current = [proc]
     stop = threading.Event()
 
     def loop():
         while not stop.wait(every):
-            if not relay_up(port):
-                ensure_relay(port, upstream)
+            if current[0].poll() is not None:
+                try:
+                    current[0] = start_relay(upstream, port)[0]
+                except OSError:
+                    pass  # port briefly busy; try again next round
     threading.Thread(target=loop, daemon=True).start()
-    return stop
+    return stop, current
+
+
+# ---------- diagnostics ----------
+
+def run_checks(include_updates=True):
+    """Everything George depends on, as (name, status, detail) rows.
+
+    status is "ok", "warn" (works, but worth knowing) or "fail" (broken).
+    """
+    rows = []
+    try:
+        lc_engine.start_engine()
+        models = lc_engine.models()
+        rows.append(("engine", "ok", f"Engine Manager at {lc_engine.url()}"))
+    except (OSError, SystemExit, lc_engine.EngineError) as e:
+        return [("engine", "fail", f"not reachable at {lc_engine.url()} ({e})")]
+    for exe in ("claude", "opencode"):
+        path = shutil.which(exe)
+        rows.append((exe, "ok" if path else "warn", path or "not installed (only needed to use it)"))
+    try:
+        proc, port = start_relay(lc_engine.url())
+        try:
+            with urllib.request.urlopen(f"http://127.0.0.1:{port}/v1/models", timeout=10) as r:
+                r.read()
+            rows.append(("relay", "ok", f"started on port {port} and reached the engine"))
+        finally:
+            proc.terminate()
+            proc.wait(timeout=10)
+            proc.stdout.close()
+    except OSError as e:
+        rows.append(("relay", "fail", f"did not work ({e})"))
+    if not models:
+        rows.append(("models", "warn", "none yet; download one in Engine Manager"))
+    for f in models:
+        if f["ctx"] < MIN_CTX:
+            rows.append((f"model {f['name']}", "warn",
+                         f"{f['ctx'] // 1024}k memory; Claude Code needs 32k or more (raise it in Engine Manager)"))
+        else:
+            rows.append((f"model {f['name']}", "ok", describe(f)))
+    if include_updates:
+        import lc_update
+        rows += lc_update.rows(lc_update.installed(), lc_update.latest(), lc_update.tested())
+    return rows
+
+
+def checks_passed(rows):
+    return all(status != "fail" for _, status, _ in rows)
+
+
+def print_checks(rows):
+    width = max(len(r[0]) for r in rows)
+    mark = {"ok": "OK  ", "warn": "note", "fail": "FAIL"}
+    for name, status, detail in rows:
+        print(f"  {mark[status]}  {name.ljust(width)}  {detail}")
+    return checks_passed(rows)
 
 
 # ---------- interaction ----------
@@ -270,12 +319,15 @@ def opencode_config(model, ctx, addons=None):
     })
 
 
-def build_command(tool, f, folder, passthrough, env):
-    """The command line and environment for the chosen tool."""
+def build_command(tool, f, folder, passthrough, env, relay_port=None):
+    """The command line and environment for the chosen tool. Claude Code goes
+    through this session's relay, on `relay_port`."""
     name = f["name"]
     if tool == "claude":
+        if relay_port is None:
+            raise ValueError("Claude Code needs the session's relay port")
         exe = shutil.which("claude") or "claude"
-        env["ANTHROPIC_BASE_URL"] = f"http://127.0.0.1:{RELAY_PORT}"
+        env["ANTHROPIC_BASE_URL"] = f"http://127.0.0.1:{relay_port}"
         # A placeholder key keeps Claude Code off the claude.ai sign-in, whose
         # model policy rejects local models. Costs nothing: the relay ignores it.
         env["ANTHROPIC_AUTH_TOKEN"] = "local"
@@ -311,7 +363,22 @@ def main():
     ap.add_argument("--model")
     ap.add_argument("--tool", choices=["claude", "opencode"])
     ap.add_argument("--yes", action="store_true", help="no questions; accept defaults")
+    ap.add_argument("--check", action="store_true", help="check the setup and exit")
+    ap.add_argument("--update", action="store_true",
+                    help="update Claude Code, OpenCode and LocalCoder, then check")
     a = ap.parse_args(argv)
+    if a.update:
+        import lc_update
+        print("Updating...")
+        for name, ok, detail in lc_update.run_updates():
+            print(f"  {'OK  ' if ok else 'FAIL'}  {name}: {detail}")
+        print("\nChecking the setup after updating:")
+        passed = print_checks(run_checks())
+        print("\nTo confirm everything still works with a model, run:\n"
+              "  python tests/run_tests.py <model> --tools claude --tasks 1-explain")
+        sys.exit(0 if passed else 1)
+    if a.check:
+        sys.exit(0 if print_checks(run_checks()) else 1)
 
     folder = Path(a.folder or os.getcwd())
     if not folder.is_dir():
@@ -344,14 +411,17 @@ def main():
     # OpenCode trusts PWD over the real working folder; a stale PWD (e.g. from
     # Git Bash) makes it work in the wrong project.
     env["PWD"] = str(folder.resolve())
-    cmd = build_command(tool, f, folder, list(passthrough), env)
+    relay = None
     if tool == "claude":
         # The relay folds Claude Code's mid-conversation system messages into
         # user text; many models' chat formats reject them otherwise.
         upstream = lc_engine.url()
-        if not ensure_relay(upstream=upstream):
+        try:
+            proc, port = start_relay(upstream)
+        except OSError:
             sys.exit("The LocalCoder relay did not start.")
-        watch_relay(upstream=upstream)
+        relay = keep_relay_running(proc, port, upstream)
+    cmd = build_command(tool, f, folder, list(passthrough), env, relay_port=port if relay else None)
 
     print(f"\nLaunching {tool} with {f['name']} in \"{folder}\"\n")
     register_session(f["name"])
@@ -363,6 +433,10 @@ def main():
         pass
     finally:
         release_model(f["name"])
+        if relay:
+            stop, current = relay
+            stop.set()
+            current[0].terminate()
     sys.exit(code)
 
 

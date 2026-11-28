@@ -9,10 +9,10 @@ BONSAI = {"name": "Bonsai-PTQ1_0", "size": 6 * 10**9, "ctx": 65536, "vision": Tr
 
 def test_claude_points_every_model_slot_at_the_engine_through_the_relay(tmp_path):
     env = {}
-    cmd = lc_launch.build_command("claude", BONSAI, tmp_path, ["--resume"], env)
+    cmd = lc_launch.build_command("claude", BONSAI, tmp_path, ["--resume"], env, relay_port=54321)
     assert cmd[1:3] == ["--model", "Bonsai-PTQ1_0"]
     assert cmd[-1] == "--resume"
-    assert env["ANTHROPIC_BASE_URL"] == f"http://127.0.0.1:{lc_launch.RELAY_PORT}"
+    assert env["ANTHROPIC_BASE_URL"] == "http://127.0.0.1:54321"
     # placeholder key keeps the claude.ai model policy from rejecting local models
     assert env["ANTHROPIC_AUTH_TOKEN"] == "local"
     assert env["ANTHROPIC_API_KEY"] == ""

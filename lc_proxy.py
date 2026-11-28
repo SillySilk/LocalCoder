@@ -20,8 +20,6 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlsplit
 
-PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 11435
-UPSTREAM = urlsplit(sys.argv[2] if len(sys.argv) > 2 else __import__("lc_engine").url())
 DEBUG_LOG = os.environ.get("LC_RELAY_LOG")  # optional: record requests/responses here
 _start_lock = threading.Lock()
 
@@ -54,11 +52,11 @@ def describe(body):
         return f"bytes={len(body or b'')}"
 
 
-def _open_upstream(method, path, body, headers):
+def _open_upstream(upstream, method, path, body, headers):
     """Send the request to the engine. If it isn't running (stopped, or being
     restarted from Engine Manager), start it and try once more."""
     for attempt in (1, 2):
-        conn = http.client.HTTPConnection(UPSTREAM.hostname, UPSTREAM.port or 80, timeout=1800)
+        conn = http.client.HTTPConnection(upstream.hostname, upstream.port or 80, timeout=1800)
         try:
             conn.request(method, path, body=body, headers=headers)
             return conn, conn.getresponse()
@@ -109,6 +107,7 @@ def fold_system_messages(body):
 
 class Relay(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
+    upstream = None  # set per server by make_server
 
     def log_message(self, *args):
         pass
@@ -152,7 +151,7 @@ class Relay(BaseHTTPRequestHandler):
         if body is not None:
             headers["Content-Length"] = str(len(body))
         try:
-            conn, resp = _open_upstream(self.command, self.path, body, headers)
+            conn, resp = _open_upstream(self.upstream, self.command, self.path, body, headers)
         except ConnectionRefusedError:
             if track:
                 log_event(f"[{rid}] engine not running and could not be started")
@@ -210,6 +209,58 @@ class Relay(BaseHTTPRequestHandler):
     do_GET = do_POST = do_HEAD = do_DELETE = do_PUT = _relay
 
 
+def make_server(port, upstream):
+    """Relay on 127.0.0.1:<port> (0 = any free port) forwarding to `upstream`."""
+    handler = type("BoundRelay", (Relay,), {"upstream": urlsplit(upstream)})
+    return ThreadingHTTPServer(("127.0.0.1", port), handler)
+
+
+def parent_alive(pid):
+    """True while process `pid` exists (no signals sent; safe on Windows)."""
+    if sys.platform == "win32":
+        import ctypes
+        k32 = ctypes.windll.kernel32
+        h = k32.OpenProcess(0x00100000, False, pid)  # SYNCHRONIZE
+        if not h:
+            return False
+        try:
+            return k32.WaitForSingleObject(h, 0) == 0x102  # WAIT_TIMEOUT = still running
+        finally:
+            k32.CloseHandle(h)
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+
+
+def watch_parent(pid, server, every=2.0):
+    """Shut the relay down once the launcher that started it is gone."""
+    import threading
+    import time
+
+    def loop():
+        while parent_alive(pid):
+            time.sleep(every)
+        server.shutdown()
+    threading.Thread(target=loop, daemon=True).start()
+
+
 if __name__ == "__main__":
-    log_event(f"relay started on port {PORT}")
-    ThreadingHTTPServer(("127.0.0.1", PORT), Relay).serve_forever()
+    # lc_proxy.py <port> <engine url> [--parent <pid>]; port 0 = any free port.
+    args = sys.argv[1:]
+    parent = None
+    if "--parent" in args:
+        i = args.index("--parent")
+        parent = int(args[i + 1])
+        del args[i:i + 2]
+    if len(args) != 2:
+        sys.exit("usage: lc_proxy.py <port> <engine url> [--parent <pid>]")
+    srv = make_server(int(args[0]), args[1])
+    log_event(f"relay started on port {srv.server_address[1]} -> {args[1]}")
+    print(f"PORT {srv.server_address[1]}", flush=True)
+    if parent:
+        watch_parent(parent, srv)
+    srv.serve_forever()
