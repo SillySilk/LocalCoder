@@ -166,6 +166,9 @@ function notifyUser(title, text) {
 /** AgentBow went away before the download started; safe to retry. */
 class NotConnected extends Error {}
 
+const STALL_MS = 10 * 60 * 1000;   // no progress this long: ask AgentBow to stop
+const STOP_GRACE_MS = 2 * 60 * 1000; // then wait this long for it to wrap up
+
 /** One download over AgentBow's WebSocket. `progress(message, done, target)` is
  *  called as photos are kept or rejected. */
 function scrape(cfg, port, req, log, progress) {
@@ -175,11 +178,26 @@ function scrape(cfg, port, req, log, progress) {
     const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`);
     let inside = false;
     let settled = false;
+    let stopping = null; // set when we asked AgentBow to stop; says why
+    let lastActivity = Date.now();
     const finish = (fn, v) => {
-      if (!settled) { settled = true; clearTimeout(timer); fn(v); }
+      if (!settled) { settled = true; clearInterval(watchdog); fn(v); }
       try { ws.close(); } catch {}
     };
-    const timer = setTimeout(() => finish(rejectP, new Error("download timed out after 20 minutes")), 20 * 60 * 1000);
+    // A slow run (the photo check takes ~15 s a photo) is fine; a run that has
+    // stopped moving is not. After STALL_MS with nothing kept, rejected or
+    // searched, ask AgentBow to stop: it then finishes normally with whatever it
+    // has saved, so those photos are still handed over.
+    const watchdog = setInterval(() => {
+      const idle = Date.now() - lastActivity;
+      if (!stopping && idle > STALL_MS) {
+        stopping = `stopped after ${Math.round(STALL_MS / 60000)} minutes without progress`;
+        log.push(`note: ${stopping}; kept what was saved`);
+        try { ws.send(JSON.stringify({ type: "stop_scrape" })); } catch {}
+      } else if (stopping && idle > STALL_MS + STOP_GRACE_MS) {
+        finish(rejectP, new Error(`AgentBow did not finish after being asked to stop (${stopping})`));
+      }
+    }, 5000);
     const lost = (why) =>
       finish(rejectP, inside ? new Error(`AgentBow ${why} during the download`) : new NotConnected(why));
     ws.onerror = () => lost("connection failed");
@@ -187,6 +205,7 @@ function scrape(cfg, port, req, log, progress) {
     ws.onopen = () => ws.send(JSON.stringify({ type: "auth", token: cfg.secret, session_id: "bow-images" }));
     ws.onmessage = (ev) => {
       const m = JSON.parse(ev.data);
+      if (!stopping) lastActivity = Date.now();
       if (m.type === "auth_ok") {
         inside = true;
         ws.send(JSON.stringify({ type: "scrape_request", ...req, dedupe: true }));
@@ -224,7 +243,7 @@ function scrape(cfg, port, req, log, progress) {
   });
 }
 
-async function download({ query, count = 10, dest_dir, verify = false, min_side = 512, delay_ms = 1500, sources,
+async function download({ query, count = 10, dest_dir, min_side = 512, delay_ms = 1500, sources,
                           single_subject = false }, progress) {
   if (!query) throw new Error("query is required");
   const cfg = settings();
@@ -239,8 +258,13 @@ async function download({ query, count = 10, dest_dir, verify = false, min_side 
       throw new Error(`unknown engine ${unknown.join(", ")}; use any of ${ENGINES.join(", ")}, or leave sources out to use all`);
     }
   }
-  // "Only that person" is a photo-check rule, so it switches the check on.
-  const req = { query, count, dest_dir: staging, verify: verify || single_subject, single_subject,
+  // The photo check is always on. Searches run with the engines' adult filters
+  // off, so without it a name search can return anything (a test search for a
+  // TV character came back mostly adult images of unrelated people). It checks
+  // that each photo matches the search, not what kind of content it is, so an
+  // adult search still gets adult results. Left optional, the model switched it
+  // off to save time, so it is not offered as an option.
+  const req = { query, count, dest_dir: staging, verify: true, single_subject,
                 min_side, delay_ms, ...(sources ? { sources } : {}) };
 
   const log = [];
@@ -253,8 +277,9 @@ async function download({ query, count = 10, dest_dir, verify = false, min_side 
       result = await scrape(cfg, port, req, log, progress);
       break;
     } catch (e) {
-      if (!(e instanceof NotConnected) || attempt === 2) throw e;
-      await sleep(1000);
+      if (e instanceof NotConnected && attempt === 1) { await sleep(1000); continue; }
+      // Photos saved before the failure are still in AgentBow's folder.
+      throw new Error(`${e.message} (any photos saved before this are in ${staging})`);
     }
   }
 
@@ -271,7 +296,7 @@ async function download({ query, count = 10, dest_dir, verify = false, min_side 
     ...sizes,
     "",
     ...log.filter((l) => !l.startsWith("skipped")),
-    skipped ? `${skipped} candidates skipped (too small, not an image, duplicate${verify ? ", or rejected by the vision check" : ""}).` : "",
+    skipped ? `${skipped} candidates skipped (too small, not an image, duplicate, or not matching the search).` : "",
   ].join("\n");
 }
 
@@ -285,21 +310,20 @@ const TOOLS = [{
     "Leave `sources` out: each engine fails on different names (Bing reads \"Reed\" as \"red\"), and all four together " +
     "cover for each other. " +
     "Skips small images, error pages and duplicates. Use this instead of hand-written download scripts when you need " +
-    "N pictures of a person, character, object or style. Call once per subject. Set verify=true to have the vision " +
-    "model reject pictures that don't match (slower; needs a vision model loaded). Searches are unfiltered, so a bare " +
-    "name can match unrelated adult or off-topic pages; use verify=true when only the subject should appear.",
+    "N pictures of a person, character, object or style. Call once per subject. Every picture is checked by the " +
+    "vision model and kept only if it matches the search; that takes ~15 s a picture, so 25 pictures can take " +
+    "10-20 minutes. Wait for it: a slow run is working, and progress updates show how far it has got.",
   inputSchema: {
     type: "object",
     properties: {
       query: { type: "string", description: "What to search for, e.g. \"Florence Henderson Carol Brady 1970s\"" },
       count: { type: "integer", minimum: 1, maximum: 200, default: 10 },
       dest_dir: { type: "string", description: "Folder to copy the images into (created if missing)" },
-      verify: { type: "boolean", default: false },
       single_subject: {
         type: "boolean", default: false,
         description: "Only when the user asks for the subject alone (\"only that person\", \"just her\", " +
           "\"no one else in the picture\"): reject images where anyone else appears. Leave it off otherwise; " +
-          "other people in a shot are often wanted (they help anchor a style set). Turns verify on.",
+          "other people in a shot are often wanted (they help anchor a style set).",
       },
       min_side: { type: "integer", default: 512, description: "Skip images whose shorter side is below this (pixels)" },
       delay_ms: { type: "integer", default: 1500, description: "Pause between downloads" },

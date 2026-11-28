@@ -8,7 +8,8 @@
 ## Downloading from websites
 - To collect pictures of a person, character, object or style, use the bow-images `image_download` tool
   (one call per subject) rather than hand-written download scripts. It searches four image engines and skips
-  small images, error pages and duplicates. Use `verify: true` when only that one subject should appear.
+  small images, error pages, duplicates and pictures that do not match the search (every picture is checked,
+  ~15 s each, so a 25-picture run can take 10-20 minutes; wait for it rather than retrying).
 - Identify yourself honestly with a descriptive User-Agent, e.g.
   `curl.exe -L -A "GeorgeDownloader/1.0 (personal project)" -o out.jpg URL`.
   Do not pretend to be a browser ("Mozilla/5.0"): many sites, Wikimedia included, block that from scripts.
