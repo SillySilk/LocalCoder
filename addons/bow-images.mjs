@@ -224,7 +224,8 @@ function scrape(cfg, port, req, log, progress) {
   });
 }
 
-async function download({ query, count = 10, dest_dir, verify = false, min_side = 512, delay_ms = 1500, sources }, progress) {
+async function download({ query, count = 10, dest_dir, verify = false, min_side = 512, delay_ms = 1500, sources,
+                          single_subject = false }, progress) {
   if (!query) throw new Error("query is required");
   const cfg = settings();
   // AgentBow only writes inside its workspace; download there, then copy out.
@@ -238,7 +239,9 @@ async function download({ query, count = 10, dest_dir, verify = false, min_side 
       throw new Error(`unknown engine ${unknown.join(", ")}; use any of ${ENGINES.join(", ")}, or leave sources out to use all`);
     }
   }
-  const req = { query, count, dest_dir: staging, verify, min_side, delay_ms, ...(sources ? { sources } : {}) };
+  // "Only that person" is a photo-check rule, so it switches the check on.
+  const req = { query, count, dest_dir: staging, verify: verify || single_subject, single_subject,
+                min_side, delay_ms, ...(sources ? { sources } : {}) };
 
   const log = [];
   let result;
@@ -292,6 +295,12 @@ const TOOLS = [{
       count: { type: "integer", minimum: 1, maximum: 200, default: 10 },
       dest_dir: { type: "string", description: "Folder to copy the images into (created if missing)" },
       verify: { type: "boolean", default: false },
+      single_subject: {
+        type: "boolean", default: false,
+        description: "Only when the user asks for the subject alone (\"only that person\", \"just her\", " +
+          "\"no one else in the picture\"): reject images where anyone else appears. Leave it off otherwise; " +
+          "other people in a shot are often wanted (they help anchor a style set). Turns verify on.",
+      },
       min_side: { type: "integer", default: 512, description: "Skip images whose shorter side is below this (pixels)" },
       delay_ms: { type: "integer", default: 1500, description: "Pause between downloads" },
       sources: { type: "array", items: { type: "string", enum: ["yandex", "bing", "brave", "ddg"] },
