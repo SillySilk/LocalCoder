@@ -1,10 +1,11 @@
-// bow-images: an MCP add-on that hands image downloading to AgentBow.
+// bow-images: George's bridge to AgentBow, its image toolbox.
 //
-// AgentBow searches four image engines at once, skips small images and error
-// pages, removes duplicates and can have a vision model check each picture.
-// This add-on starts AgentBow when needed — headless, and pointed at the
-// shared Engine Manager engine (BOW_ENGINE_URL) so it never starts a second
-// copy of a model — then runs one download over its WebSocket.
+// Offers AgentBow's image tools to George: search-and-download from four image
+// engines, grab every image on a web page (both over AgentBow's WebSocket, with
+// progress), and AgentBow's own tools (photo check, duplicates, captions,
+// stats, resize), passed straight through to its /api/tools/call.
+// AgentBow is started when needed (headless, on the shared Engine Manager
+// engine, so it never loads a second copy of a model).
 //
 // AgentBow exits after BOW_IDLE_SECS with nothing to do, so it isn't left in
 // memory; the next call starts it again (about 20 seconds).
@@ -13,7 +14,7 @@
 // (shared engine), BOW_IDLE_SECS. AgentBow's own desktop\.env supplies its
 // port, workspace and login secret.
 
-import { spawn } from "node:child_process";
+import { spawn, execFileSync } from "node:child_process";
 import { readFileSync, existsSync, mkdirSync, copyFileSync, statSync, unlinkSync, openSync, closeSync } from "node:fs";
 import { join, basename, resolve } from "node:path";
 import { tmpdir } from "node:os";
@@ -169,9 +170,9 @@ class NotConnected extends Error {}
 const STALL_MS = 10 * 60 * 1000;   // no progress this long: ask AgentBow to stop
 const STOP_GRACE_MS = 2 * 60 * 1000; // then wait this long for it to wrap up
 
-/** One download over AgentBow's WebSocket. `progress(message, done, target)` is
- *  called as photos are kept or rejected. */
-function scrape(cfg, port, req, log, progress) {
+/** One job (search download or page grab) over AgentBow's WebSocket.
+ *  `progress(message, done, target)` is called as photos are kept or rejected. */
+function runJob(cfg, port, message, label, target, log, progress, onKept) {
   let kept = 0;
   let rejected = 0;
   return new Promise((resolveP, rejectP) => {
@@ -199,7 +200,7 @@ function scrape(cfg, port, req, log, progress) {
       }
     }, 5000);
     const lost = (why) =>
-      finish(rejectP, inside ? new Error(`AgentBow ${why} during the download`) : new NotConnected(why));
+      finish(rejectP, inside ? new Error(`AgentBow ${why} during the job`) : new NotConnected(why));
     ws.onerror = () => lost("connection failed");
     ws.onclose = () => lost("closed the connection");
     ws.onopen = () => ws.send(JSON.stringify({ type: "auth", token: cfg.secret, session_id: "bow-images" }));
@@ -208,7 +209,7 @@ function scrape(cfg, port, req, log, progress) {
       if (!stopping) lastActivity = Date.now();
       if (m.type === "auth_ok") {
         inside = true;
-        ws.send(JSON.stringify({ type: "scrape_request", ...req, dedupe: true }));
+        ws.send(JSON.stringify(message));
       } else if (m.type === "auth_error") {
         finish(rejectP, new Error("AgentBow rejected the login (BOW_SECRET)"));
       } else if (m.type === "error") {
@@ -217,6 +218,7 @@ function scrape(cfg, port, req, log, progress) {
         if (m.kind === "source") log.push(`${m.source}: ${m.count} found${m.error ? ` (${m.error})` : ""}`);
         if (m.kind === "candidates") log.push(`candidates: ${m.total} (filtered ${m.filtered})`);
         if (m.kind === "failed") log.push(`skipped: ${m.reason}`);
+        if (m.kind === "phase" && /^could not open /.test(m.label || "")) log.push(`note: ${m.label}`);
         if (m.kind === "phase" && /captcha/i.test(m.label || "")) {
           // AgentBow has put the engine's check in front in its browser window and
           // waits two minutes for someone to solve it.
@@ -224,13 +226,13 @@ function scrape(cfg, port, req, log, progress) {
           const text = `${engine} wants you to prove you're human. Solve its check in the AgentBow browser ` +
             `window (Edge) within 2 minutes and the download carries on; otherwise ${engine} is skipped.`;
           log.push(`note: ${text}`);
-          progress(text, kept, req.count);
+          progress(text, kept, target);
           notifyUser("Image download needs you", text);
         }
-        if (m.kind === "downloaded") kept = m.done;
+        if (m.kind === "downloaded") { kept = m.done; onKept(m.path); }
         if (m.kind === "failed") rejected++;
         if (m.kind === "downloaded" || m.kind === "failed") {
-          progress(`${req.query}: ${kept} of ${req.count} kept, ${rejected} rejected`, kept, req.count);
+          progress(`${label}: ${kept} of ${target} kept, ${rejected} rejected`, kept, target);
         }
         if (m.kind === "error") {
           // Keep any "solve the check" note: it is usually why nothing came back.
@@ -241,6 +243,56 @@ function scrape(cfg, port, req, log, progress) {
       }
     };
   });
+}
+
+/** Run a job into AgentBow's folder `staging`, copying each picture to
+ *  `dest_dir` the moment it is kept, then describe the result. Pictures are
+ *  checked before AgentBow saves them, so everything copied has passed; copying
+ *  as they come means the folder fills while the run goes, and a run that is
+ *  cut short has still delivered what it kept. */
+async function runAndCollect(cfg, staging, message, label, target, dest_dir, progress) {
+  const log = [];
+  const out = dest_dir ? resolve(dest_dir) : null;
+  if (out) mkdirSync(out, { recursive: true });
+  const delivered = new Map(); // AgentBow's path -> the copy in dest_dir
+  const deliver = (p) => {
+    if (!out || !p || delivered.has(p)) return;
+    try {
+      const to = join(out, basename(p));
+      copyFileSync(p, to);
+      delivered.set(p, to);
+    } catch (e) {
+      log.push(`note: could not copy ${p} to ${out}: ${e.message}`);
+    }
+  };
+  let result;
+  // Retry once if AgentBow went away between the check and the connection
+  // (it was just closing itself after sitting idle).
+  for (let attempt = 1; ; attempt++) {
+    const port = await ensureBow(cfg);
+    try {
+      result = await runJob(cfg, port, message, label, target, log, progress, deliver);
+      break;
+    } catch (e) {
+      if (e instanceof NotConnected && attempt === 1) { await sleep(1000); continue; }
+      const got = out ? `${delivered.size} photos kept before this are in ${out}` :
+        `any photos saved before this are in ${staging}`;
+      throw new Error(`${e.message} (${got})`);
+    }
+  }
+
+  // Anything the live copy missed (a dropped message) is copied now.
+  for (const p of result.downloaded || []) deliver(p);
+  const saved = out ? [...delivered.values()] : (result.downloaded || []);
+  const sizes = saved.map((p) => `${p} (${Math.round(statSync(p).size / 1024)} KB)`);
+  const skipped = log.filter((l) => l.startsWith("skipped")).length;
+  return [
+    `Saved ${saved.length} of ${target} images for ${label}${dest_dir ? ` to ${dest_dir}` : ""}.`,
+    ...sizes,
+    "",
+    ...log.filter((l) => !l.startsWith("skipped")),
+    skipped ? `${skipped} candidates skipped (too small, not an image, duplicate, or not matching the search).` : "",
+  ].join("\n");
 }
 
 async function download({ query, count = 10, dest_dir, min_side = 512, delay_ms = 1500, sources,
@@ -264,46 +316,57 @@ async function download({ query, count = 10, dest_dir, min_side = 512, delay_ms 
   // that each photo matches the search, not what kind of content it is, so an
   // adult search still gets adult results. Left optional, the model switched it
   // off to save time, so it is not offered as an option.
-  const req = { query, count, dest_dir: staging, verify: true, single_subject,
-                min_side, delay_ms, ...(sources ? { sources } : {}) };
+  const message = { type: "scrape_request", query, count, dest_dir: staging, verify: true, single_subject,
+                    min_side, delay_ms, dedupe: true, ...(sources ? { sources } : {}) };
+  return runAndCollect(cfg, staging, message, `"${query}"`, count, dest_dir, progress);
+}
 
-  const log = [];
-  let result;
-  // Retry once if AgentBow went away between the check and the connection
-  // (it was just closing itself after sitting idle).
+async function pageGrab({ url, count = 50, dest_dir, scrolls = 3 }, progress) {
+  if (!url || !/^https?:\/\//i.test(url)) throw new Error("url must be a full http(s) address");
+  const cfg = settings();
+  const staging = join(cfg.workspace, "bow-images", slug(`page ${new URL(url).hostname} ${new URL(url).pathname}`));
+  mkdirSync(staging, { recursive: true });
+  const message = { type: "page_scrape_request", url, count, dest_dir: staging, scrolls };
+  return runAndCollect(cfg, staging, message, url, count, dest_dir, progress);
+}
+
+/** AgentBow's own tools, read from `bow-desktop --list-tools` (starts nothing). */
+let bowToolCache = null;
+function bowTools() {
+  if (bowToolCache) return bowToolCache;
+  const cfg = settings();
+  if (!existsSync(cfg.exe)) throw new Error(`AgentBow is not built yet (${cfg.exe}). Run bow.bat once.`);
+  const out = execFileSync(cfg.exe, ["--list-tools"], { encoding: "utf8", windowsHide: true, timeout: 30000 });
+  bowToolCache = JSON.parse(out).tools;
+  return bowToolCache;
+}
+
+/** Run one of AgentBow's own tools through its /api/tools/call. */
+async function callBowTool(name, args) {
+  const cfg = settings();
   for (let attempt = 1; ; attempt++) {
     const port = await ensureBow(cfg);
+    let r;
     try {
-      result = await scrape(cfg, port, req, log, progress);
-      break;
+      r = await fetch(`http://127.0.0.1:${port}/api/tools/call`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-bow-token": cfg.secret },
+        body: JSON.stringify({ name, arguments: args }),
+      });
     } catch (e) {
-      if (e instanceof NotConnected && attempt === 1) { await sleep(1000); continue; }
-      // Photos saved before the failure are still in AgentBow's folder.
-      throw new Error(`${e.message} (any photos saved before this are in ${staging})`);
+      if (attempt === 1) { await sleep(1000); continue; } // AgentBow was just closing; start it again
+      throw new Error(`could not reach AgentBow: ${e.message}`);
     }
+    const body = await r.json();
+    if (!r.ok) throw new Error(body.error || `AgentBow answered ${r.status}`);
+    return typeof body.result === "string" ? body.result : JSON.stringify(body.result, null, 2);
   }
-
-  let saved = result.downloaded || [];
-  if (dest_dir) {
-    const out = resolve(dest_dir);
-    mkdirSync(out, { recursive: true });
-    saved = saved.map((p) => { const to = join(out, basename(p)); copyFileSync(p, to); return to; });
-  }
-  const sizes = saved.map((p) => `${p} (${Math.round(statSync(p).size / 1024)} KB)`);
-  const skipped = log.filter((l) => l.startsWith("skipped")).length;
-  return [
-    `Saved ${saved.length} of ${count} images for "${query}"${dest_dir ? ` to ${dest_dir}` : ""}.`,
-    ...sizes,
-    "",
-    ...log.filter((l) => !l.startsWith("skipped")),
-    skipped ? `${skipped} candidates skipped (too small, not an image, duplicate, or not matching the search).` : "",
-  ].join("\n");
 }
 
 // AgentBow's names for the engines its downloader runs.
 const ENGINES = ["yandex", "bing", "brave", "ddg"];
 
-const TOOLS = [{
+const OWN_TOOLS = [{
   name: "image_download",
   description:
     "Find and download images of a subject from four image search engines at once (Yandex, Bing, Brave, DuckDuckGo). " +
@@ -332,6 +395,23 @@ const TOOLS = [{
     },
     required: ["query"],
   },
+}, {
+  name: "image_page_grab",
+  description:
+    "Download the images on one web page (a gallery, a wiki category, a fan site's episode stills) in a real " +
+    "browser, so pages that block scripts still work. Use when you have found a good page; use image_download to " +
+    "search instead. Skips small images and duplicates; no photo check, so review the result.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      url: { type: "string", description: "Full address of the page" },
+      count: { type: "integer", minimum: 1, maximum: 500, default: 50, description: "Most images to save" },
+      dest_dir: { type: "string", description: "Folder to copy the images into (created if missing)" },
+      scrolls: { type: "integer", minimum: 0, maximum: 20, default: 3,
+                 description: "Scroll the page this many times first, to load lazy images" },
+    },
+    required: ["url"],
+  },
 }];
 
 function reply(id, result) { process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id, result }) + "\n"); }
@@ -345,13 +425,19 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
     reply(id, {
       protocolVersion: params?.protocolVersion || "2024-11-05",
       capabilities: { tools: {} },
-      serverInfo: { name: "bow-images", version: "1.1.0" },
+      serverInfo: { name: "bow-images", version: "2.0.0" },
     });
   } else if (method === "tools/list") {
-    reply(id, { tools: TOOLS });
+    try {
+      reply(id, { tools: [...OWN_TOOLS, ...bowTools()] });
+    } catch (e) {
+      fail(id, e.message);
+    }
   } else if (method === "tools/call") {
-    // Progress updates while the download runs, for clients that ask for them
-    // (MCP progress notifications), and on stderr for the client's log.
+    const name = params?.name;
+    const args = params?.arguments || {};
+    // Progress updates while a job runs, for clients that ask for them (MCP
+    // progress notifications), and on stderr for the client's log.
     const token = params?._meta?.progressToken;
     const progress = (message, done, total) => {
       process.stderr.write(`bow-images: ${message}\n`);
@@ -363,10 +449,14 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
       }
     };
     try {
-      const text = await download(params?.arguments || {}, progress);
+      let text;
+      if (name === "image_download") text = await download(args, progress);
+      else if (name === "image_page_grab") text = await pageGrab(args, progress);
+      else if (bowTools().some((t) => t.name === name)) text = await callBowTool(name, args);
+      else throw new Error(`unknown tool ${name}`);
       reply(id, { content: [{ type: "text", text }] });
     } catch (e) {
-      reply(id, { content: [{ type: "text", text: `image_download failed: ${e.message}` }], isError: true });
+      reply(id, { content: [{ type: "text", text: `${name} failed: ${e.message}` }], isError: true });
     }
   } else if (method === "ping") {
     reply(id, {});

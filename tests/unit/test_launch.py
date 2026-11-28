@@ -102,3 +102,22 @@ def test_bow_images_is_on_when_agentbow_is_built():
     server = lc_launch.bow_images_server()
     assert server["environment"]["BOW_IDLE_SECS"] == "120"
     assert os.path.isfile(server["command"][1])
+
+
+def test_opencode_gets_the_image_helper_agent_when_agentbow_is_built(monkeypatch, tmp_path):
+    bow = tmp_path / "bow-desktop.exe"
+    bow.write_text("")
+    monkeypatch.setattr(lc_launch, "BOW_EXE", bow)
+    monkeypatch.setattr(lc_launch.shutil, "which", lambda _: None)
+    cfg, _ = lc_launch.opencode_addons({})
+    helper = cfg["agents"]["images"]
+    assert helper["mode"] == "subagent"
+    assert "image_download" in helper["system"]
+    assert {"action": "subagent", "resource": "*", "effect": "deny"} in helper["permissions"]
+
+
+def test_no_image_helper_without_agentbow(monkeypatch, tmp_path):
+    monkeypatch.setattr(lc_launch, "BOW_EXE", tmp_path / "missing.exe")
+    monkeypatch.setattr(lc_launch.shutil, "which", lambda _: None)
+    cfg, _ = lc_launch.opencode_addons({})
+    assert "agents" not in cfg

@@ -6,6 +6,11 @@
 - No `&&` or `||` between commands; use `;` or `if ($?) { ... }`.
 
 ## Downloading from websites
+- To collect or curate pictures (downloads, training sets, duplicates, captions): call the `subagent`
+  tool with agent `images` and pass it the whole request (subjects, how many, which folder). It has the
+  image tools and works in its own conversation; you get a short report back.
+- `bow-images` is an add-on (its tools are called as `tools["bow-images"].<name>(...)`), not a skill:
+  never try to load it with the `skill` tool.
 - To collect pictures of a person, character, object or style, use the bow-images `image_download` tool
   (one call per subject) rather than hand-written download scripts. It searches four image engines and skips
   small images, error pages, duplicates and pictures that do not match the search (every picture is checked,

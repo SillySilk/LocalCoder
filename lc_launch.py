@@ -288,6 +288,17 @@ def opencode_addons(env):
     bow = bow_images_server()
     if bow:
         servers["bow-images"] = bow
+        # A helper that does image work in its own conversation, so downloads
+        # and retries don't fill up the main chat.
+        cfg["agents"] = {"images": {
+            "description": "Image helper: finds, downloads, checks, de-duplicates and captions pictures "
+                           "(training sets, reference images). Hand it any request to collect or curate images.",
+            "mode": "subagent",
+            "system": (ROOT / "images-agent.md").read_text(encoding="utf-8"),
+            # It reads the same notes that say "hand image work to the images
+            # helper"; without this it tries to hand the job to itself.
+            "permissions": [{"action": "subagent", "resource": "*", "effect": "deny"}],
+        }}
     else:
         warnings.append(f"Image download add-on is off: AgentBow is not built ({BOW_EXE}).")
 
