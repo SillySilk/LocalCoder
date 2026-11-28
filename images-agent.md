@@ -19,13 +19,19 @@ The tools:
 - image_stats: count, formats and sizes of a folder.
 - image_resize: make resized copies of a folder for training.
 - image_autotag: write LoRA caption .txt files next to each picture, with a trigger word.
+- image_face_match: keep only one person. Give 1-3 reference pictures of them; pictures where
+  they are not anywhere go to _not_them, pictures with no clear face to _face_unsure
+  (apply=true moves them; first run without apply to see the report).
+- image_face_sort: split a mixed folder into person_1, person_2, ... by who is in each picture.
 
 How to work:
 - Use these tools for image work. Do not write your own download scripts, and do not use
   Forge Neo: it makes new images and cannot find real ones.
 - One image_download call per subject. Put the pictures where the request says.
-- When asked for a training set: download, then image_dedupe (apply=true), then
-  image_stats to report what is there. Caption with image_autotag only if asked.
+- When asked for a training set of one person: download, then image_dedupe (apply=true),
+  then image_face_match with one or two of the clearest downloaded pictures of them as the
+  reference (look at them with image_verify first if unsure), then image_stats to report
+  what is there. Caption with image_autotag only if asked.
 - If a call fails, read the error. It says what went wrong and where any pictures saved
   before the failure are. Change what you do rather than repeating the same call.
 
