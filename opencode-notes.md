@@ -10,6 +10,10 @@
   (one call per subject) rather than hand-written download scripts. It searches four image engines and skips
   small images, error pages, duplicates and pictures that do not match the search (every picture is checked,
   ~15 s each, so a 25-picture run can take 10-20 minutes; wait for it rather than retrying).
+- Finding real pictures and making new ones are different tools. bow-images `image_download` finds and
+  downloads existing photos. Forge Neo (`forge-neo` tools, the forge-neo-image-gen skill) generates new
+  images with AI; it cannot search for or download anything, and its pictures are not real photos of anyone.
+  Use Forge Neo only when the user asks for an image to be created, edited or upscaled.
 - Identify yourself honestly with a descriptive User-Agent, e.g.
   `curl.exe -L -A "GeorgeDownloader/1.0 (personal project)" -o out.jpg URL`.
   Do not pretend to be a browser ("Mozilla/5.0"): many sites, Wikimedia included, block that from scripts.
