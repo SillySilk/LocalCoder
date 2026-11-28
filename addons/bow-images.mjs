@@ -147,6 +147,22 @@ function slug(s) {
   return s.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "").slice(0, 60) || "images";
 }
 
+/** A Windows pop-up (tray balloon) that doesn't wait for a click. For moments the
+ *  user has to act: an engine's "are you a robot?" check. */
+function notifyUser(title, text) {
+  if (process.platform !== "win32") return;
+  const esc = (s) => s.replace(/'/g, "''");
+  const ps =
+    "Add-Type -AssemblyName System.Windows.Forms; Add-Type -AssemblyName System.Drawing;" +
+    "$n = New-Object System.Windows.Forms.NotifyIcon; $n.Icon = [System.Drawing.SystemIcons]::Information;" +
+    `$n.BalloonTipTitle = '${esc(title)}'; $n.BalloonTipText = '${esc(text)}'; $n.Visible = $true;` +
+    "$n.ShowBalloonTip(15000); Start-Sleep -Seconds 16; $n.Dispose()";
+  const child = spawn("powershell", ["-NoProfile", "-WindowStyle", "Hidden", "-Command", ps],
+    { detached: true, stdio: "ignore", windowsHide: true });
+  child.on("error", () => {});
+  child.unref();
+}
+
 /** AgentBow went away before the download started; safe to retry. */
 class NotConnected extends Error {}
 
@@ -182,12 +198,26 @@ function scrape(cfg, port, req, log, progress) {
         if (m.kind === "source") log.push(`${m.source}: ${m.count} found${m.error ? ` (${m.error})` : ""}`);
         if (m.kind === "candidates") log.push(`candidates: ${m.total} (filtered ${m.filtered})`);
         if (m.kind === "failed") log.push(`skipped: ${m.reason}`);
+        if (m.kind === "phase" && /captcha/i.test(m.label || "")) {
+          // AgentBow has put the engine's check in front in its browser window and
+          // waits two minutes for someone to solve it.
+          const engine = (m.label.match(/captcha for (\w+)/i) || [])[1] || "A search engine";
+          const text = `${engine} wants you to prove you're human. Solve its check in the AgentBow browser ` +
+            `window (Edge) within 2 minutes and the download carries on; otherwise ${engine} is skipped.`;
+          log.push(`note: ${text}`);
+          progress(text, kept, req.count);
+          notifyUser("Image download needs you", text);
+        }
         if (m.kind === "downloaded") kept = m.done;
         if (m.kind === "failed") rejected++;
         if (m.kind === "downloaded" || m.kind === "failed") {
           progress(`${req.query}: ${kept} of ${req.count} kept, ${rejected} rejected`, kept, req.count);
         }
-        if (m.kind === "error") finish(rejectP, new Error(m.message));
+        if (m.kind === "error") {
+          // Keep any "solve the check" note: it is usually why nothing came back.
+          const notes = log.filter((l) => l.startsWith("note: ")).map((l) => l.slice(6));
+          finish(rejectP, new Error([m.message, ...notes].join(" ")));
+        }
         if (m.kind === "done") finish(resolveP, m);
       }
     };
